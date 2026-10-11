@@ -1,12 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import './App.css'
 
-interface AgentMeta {
-  name: string
-  title: string
-  id: string
-}
-
 interface DynamicToken {
   token: string
   role: string
@@ -22,7 +16,7 @@ interface UserProfile {
   role: string
   store_id: string
   region: string
-  accessible_agents: AgentMeta[]
+  accessible_agents?: any[]
   dynamic_token: DynamicToken
 }
 
@@ -44,9 +38,36 @@ const DEMO_PERSONAS = [
   { username: 'hana', name: 'Hana Sato', role: 'hr_admin', store: 'HQ', badge: 'HR Administrator' },
 ]
 
+const ROLE_SUGGESTIONS: Record<string, string[]> = {
+  barista: [
+    'Check low inventory for my store (S01)',
+    'Can I see all employee salaries? (RBAC Block Test)',
+    'Remember that I prefer brewing light roasts with oat milk (Mem0 Test)',
+  ],
+  store_manager: [
+    'Show team roster for Store S01',
+    'Restock Oat Milk (SKU-OAT-001) by 25 units',
+    'Summarize sales revenue for Store S01',
+  ],
+  regional_manager: [
+    'Summarize sales across all stores in the North region',
+    'List store managers across my region',
+    'Which store has the lowest inventory levels?',
+  ],
+  finance_analyst: [
+    'Provide salary summary and budget breakdown for Store S01',
+    'Show total sales revenue for all stores',
+    'Analyze inventory costs across regions',
+  ],
+  hr_admin: [
+    'Show full employee roster across all stores',
+    'List all baristas working at Store S01',
+    'Audit staff distribution across regions',
+  ],
+}
+
 export default function App() {
   const [user, setUser] = useState<UserProfile | null>(null)
-  const [selectedAgent, setSelectedAgent] = useState<string>('bb_assistant')
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -62,9 +83,6 @@ export default function App() {
       .then(data => {
         if (data) {
           setUser(data)
-          if (data.accessible_agents?.length > 0) {
-            setSelectedAgent(data.accessible_agents[0].name)
-          }
           refreshMemories()
         }
       })
@@ -97,12 +115,11 @@ export default function App() {
       if (res.ok) {
         const u = await res.json()
         setUser(u)
-        setSelectedAgent(u.accessible_agents[0]?.name || 'bb_assistant')
         setMessages([
           {
             id: 'welcome',
             role: 'assistant',
-            content: `Welcome ${u.username}! Signed in as **${u.role}** at store **${u.store_id}** (${u.region}).\n\nAuthorized Agents: ${u.accessible_agents.map((a: any) => a.title).join(', ')}.\nEphemeral Snowflake OAuth Token: \`${u.dynamic_token?.token?.slice(0, 16)}...\``,
+            content: `☕ **Welcome ${u.username}!**\n\nAuthenticated via Keycloak SSO as **${u.role}** (Store **${u.store_id}**, Region **${u.region}**).\n\nYou are connected to the **Bean & Brew Master Operations Agent** with Zero Trust Multi-Agent RBAC.\nEphemeral Snowflake OAuth Token: \`${u.dynamic_token?.token?.slice(0, 16)}...\` (Valid for 300s).`,
             timestamp: new Date().toLocaleTimeString()
           }
         ])
@@ -122,16 +139,14 @@ export default function App() {
     setLongTermMemories([])
   }
 
-  const sendMessage = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!input.trim() || loading || !user) return
+  const sendQuery = async (queryText: string) => {
+    if (!queryText.trim() || loading || !user) return
 
-    const userText = input.trim()
     setInput('')
     const userMsg: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: userText,
+      content: queryText,
       timestamp: new Date().toLocaleTimeString()
     }
     setMessages(prev => [...prev, userMsg])
@@ -141,7 +156,7 @@ export default function App() {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userText, agent_name: selectedAgent, thread_id: threadId }),
+        body: JSON.stringify({ message: queryText, thread_id: threadId }),
         credentials: 'include'
       })
       if (res.ok) {
@@ -192,7 +207,7 @@ export default function App() {
           <div className="logo-badge">☕ Bean & Brew</div>
           <h2>Enterprise Zero Trust AI Portal</h2>
           <p className="subtitle">
-            watsonx Orchestrate with Agent RBAC, Mem0 Long-Term Memory & Snowflake Ephemeral OAuth Tokens.
+            IBM watsonx Orchestrate Multi-Agent Router with Keycloak SSO, Ephemeral Snowflake OAuth Tokens & Mem0 Long-Term Memory.
           </p>
 
           <div className="persona-selection">
@@ -217,6 +232,8 @@ export default function App() {
     )
   }
 
+  const suggestions = ROLE_SUGGESTIONS[user.role] || []
+
   return (
     <div className="app-container">
       {/* Header */}
@@ -225,22 +242,14 @@ export default function App() {
           <span className="logo-icon">☕</span>
           <div>
             <h3>Bean & Brew AI Portal</h3>
-            <span className="model-tag">Model: Qwen 2.5 7B (Modal vLLM → Ollama fallback)</span>
+            <span className="model-tag">Master Agent Router (Qwen 2.5 7B on Modal vLLM → Ollama)</span>
           </div>
         </div>
 
         <div className="user-profile-strip">
-          <div className="agent-selector-wrapper">
-            <label className="agent-label">Target Agent:</label>
-            <select
-              className="agent-select"
-              value={selectedAgent}
-              onChange={e => setSelectedAgent(e.target.value)}
-            >
-              {user.accessible_agents.map(a => (
-                <option key={a.name} value={a.name}>{a.title}</option>
-              ))}
-            </select>
+          <div className="agent-badge-pill">
+            <span className="agent-indicator-dot"></span>
+            <span>Master Operations Agent</span>
           </div>
 
           <div className="user-meta">
@@ -260,7 +269,7 @@ export default function App() {
               <div key={m.id} className={`message-bubble ${m.role}`}>
                 <div className="bubble-header">
                   <span className="author">
-                    {m.role === 'user' ? user.username : (m.agent_used || 'Bean & Brew Assistant')}
+                    {m.role === 'user' ? user.username : (m.agent_used || 'Master Agent')}
                   </span>
                   <span className="time">{m.timestamp}</span>
                 </div>
@@ -293,16 +302,31 @@ export default function App() {
             ))}
             {loading && (
               <div className="message-bubble assistant loading-indicator">
-                <span className="dots">☕ {selectedAgent} is executing with Snowflake OAuth token...</span>
+                <span className="dots">☕ Master Agent reasoning & evaluating Zero Trust policies...</span>
               </div>
             )}
             <div ref={messagesEndRef} />
           </div>
 
-          <form className="input-bar" onSubmit={sendMessage}>
+          {/* Quick Suggestions Strip */}
+          <div className="suggestions-strip">
+            <span className="suggestions-label">Quick Actions:</span>
+            {suggestions.map((s, idx) => (
+              <button
+                key={idx}
+                className="suggestion-chip"
+                onClick={() => sendQuery(s)}
+                disabled={loading}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+
+          <form className="input-bar" onSubmit={(e) => { e.preventDefault(); sendQuery(input); }}>
             <input
               type="text"
-              placeholder={`Ask ${selectedAgent} as ${user.role}...`}
+              placeholder={`Ask Master Agent as ${user.role} (e.g. inventory, sales, roster)...`}
               value={input}
               onChange={e => setInput(e.target.value)}
               disabled={loading}
@@ -325,7 +349,7 @@ export default function App() {
           <div className="drawer-body">
             {activeTab === 'tools' && (
               <div>
-                <p className="drawer-desc">Real-time WXO execution traces with context variables:</p>
+                <p className="drawer-desc">Real-time WXO execution traces & tool parameters:</p>
                 <pre className="audit-json">
                   {JSON.stringify(inspectAudit?.steps || "Click 'Inspect Zero Trust Audit' on any assistant message to view execution traces.", null, 2)}
                 </pre>
