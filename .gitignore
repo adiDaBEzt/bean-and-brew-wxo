@@ -9,6 +9,9 @@ __pycache__/
 dist/
 .DS_Store
 *.pem
+*.p8
+*.key
 keys/
+snowflake/keys/
 infra/keycloak/realm-bean-brew.json
 data/

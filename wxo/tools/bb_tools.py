@@ -10,11 +10,70 @@ Security model (defence in depth, see docs/identity-flow.md):
   4. Snowflake row access / masking policies are the final enforcement layer.
 """
 from contextlib import contextmanager
+import os
+import pathlib
 
 import snowflake.connector
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import serialization
 from ibm_watsonx_orchestrate.agent_builder.connections import ConnectionType
 from ibm_watsonx_orchestrate.agent_builder.tools import tool
 from ibm_watsonx_orchestrate.run import connections
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+DEFAULT_KEY_PATH = ROOT / "snowflake" / "keys" / "rsa_key.p8"
+
+
+def _load_private_key_der(key_input: str | bytes | None = None) -> bytes | None:
+    """Load PKCS#8 PEM private key and return DER bytes for Snowflake connector."""
+    key_bytes = None
+    if key_input is None:
+        key_path = os.getenv("SNOWFLAKE_PRIVATE_KEY_PATH")
+        if not key_path and DEFAULT_KEY_PATH.exists():
+            key_path = str(DEFAULT_KEY_PATH)
+        if key_path and os.path.exists(key_path):
+            with open(key_path, "rb") as f:
+                key_bytes = f.read()
+    elif isinstance(key_input, bytes):
+        key_bytes = key_input
+    elif isinstance(key_input, str):
+        if os.path.exists(key_input):
+            with open(key_input, "rb") as f:
+                key_bytes = f.read()
+        else:
+            key_bytes = key_input.encode("utf-8")
+
+    if not key_bytes:
+        return None
+
+    passphrase = os.getenv("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE")
+    password = passphrase.encode("utf-8") if passphrase else None
+
+    try:
+        p_key = serialization.load_pem_private_key(
+            key_bytes,
+            password=password,
+            backend=default_backend(),
+        )
+        return p_key.private_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    except Exception:
+        try:
+            p_key = serialization.load_der_private_key(
+                key_bytes,
+                password=password,
+                backend=default_backend(),
+            )
+            return p_key.private_bytes(
+                encoding=serialization.Encoding.DER,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        except Exception:
+            return None
 
 # app roles (Keycloak realm roles) -> Snowflake role suffix / WXO connection
 ROLE_TO_SF = {
@@ -48,11 +107,21 @@ def _session(bb_role: str, allowed: set, bb_store_id: str, bb_region: str):
             f"Allowed roles: {', '.join(sorted(allowed))}."
         )
     c = connections.key_value(_conn_id(ROLE_TO_SF[role]))
-    conn = snowflake.connector.connect(
-        account=c["account"], user=c["user"], password=c["password"],
-        warehouse="BB_WH", database="BEAN_BREW", schema="CORE",
-        session_parameters={"QUERY_TAG": f"wxo-bean-brew:{role}"},
-    )
+    conn_params = {
+        "account": c["account"],
+        "user": c["user"],
+        "warehouse": "BB_WH",
+        "database": "BEAN_BREW",
+        "schema": "CORE",
+        "session_parameters": {"QUERY_TAG": f"wxo-bean-brew:{role}"},
+    }
+    priv_key = _load_private_key_der(c.get("private_key") or c.get("private_key_path"))
+    if priv_key is not None:
+        conn_params["private_key"] = priv_key
+    elif "password" in c:
+        conn_params["password"] = c["password"]
+
+    conn = snowflake.connector.connect(**conn_params)
     try:
         cur = conn.cursor()
         # Scope variables consumed by the Snowflake row access policy. Bound values, never concatenated.

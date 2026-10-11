@@ -20,7 +20,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from jose import JWTError, jwt
 from pydantic import BaseModel
 
-from bff.memory_manager import record_user_memory, search_user_memories
+from bff.memory_manager import (
+    get_embedder,
+    get_user_semantic_facts,
+    init_db,
+    record_user_memory,
+    search_user_memories,
+)
 from bff.oauth_broker import token_broker
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -50,6 +56,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def startup_event():
+    init_db()
+    asyncio.create_task(asyncio.to_thread(get_embedder))
 
 _iam_token_cache: Dict[str, any] = {"token": None, "expires_at": 0}
 
@@ -208,26 +220,27 @@ def logout(response: Response):
 @app.get("/api/memory")
 def get_memories(user: dict = Depends(get_current_user)):
     user_id = user["username"]
-    memories = search_user_memories(user_id=user_id, query="preferences and facts", limit=10)
-    return {"user_id": user_id, "memories": memories}
+    memories = search_user_memories(user_id=user_id, query="preferences and facts", limit=20)
+    facts = get_user_semantic_facts(user_id=user_id)
+    return {"user_id": user_id, "memories": memories, "facts": facts}
 
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
-    # 1. Retrieve relevant long-term memories from Mem0
+    # 1. Retrieve relevant long-term memories from Structured Semantic Memory
     user_id = user["username"]
     recalled_memories = []
     try:
         recalled_memories = await asyncio.wait_for(
-            asyncio.to_thread(search_user_memories, user_id=user_id, query=req.message, limit=3),
-            timeout=2.5,
+            asyncio.to_thread(search_user_memories, user_id=user_id, query=req.message, limit=5),
+            timeout=3.0,
         )
     except Exception:
         recalled_memories = []
 
     memory_context_str = ""
     if recalled_memories:
-        memory_context_str = "\n[Persistent User Long-Term Memory]:\n" + "\n".join(f"- {m}" for m in recalled_memories)
+        memory_context_str = "\n<user_preferences>\n" + "\n".join(f"- {m}" for m in recalled_memories) + "\n</user_preferences>"
 
     # 2. Ephemeral Snowflake Token
     dyn_token = token_broker.mint_token(

@@ -135,8 +135,14 @@ def main():
     seed(cur)
     run_file(cur, "03_governance.sql")
 
-    # role users: one dedicated, password-based LEGACY_SERVICE user per role (never the admin)
+    # role users: dedicated service users per role (never the admin)
     cur.execute("USE ROLE ACCOUNTADMIN")
+    pub_key_path = ROOT / "snowflake" / "keys" / "rsa_key.pub"
+    pub_key_str = None
+    if pub_key_path.exists():
+        pub_text = pub_key_path.read_text()
+        pub_key_str = "".join(l.strip() for l in pub_text.splitlines() if not l.startswith("-----"))
+
     for r in ROLES:
         key = f"SNOWFLAKE_BB_{r}_PASSWORD"
         pw = env.get(key) or secrets.token_urlsafe(18)
@@ -146,8 +152,10 @@ def main():
             f"CREATE USER IF NOT EXISTS BB_{r}_SVC PASSWORD='{pw}' TYPE=LEGACY_SERVICE "
             f"DEFAULT_ROLE=BB_{r} DEFAULT_WAREHOUSE=BB_WH MUST_CHANGE_PASSWORD=FALSE")
         cur.execute(f"ALTER USER BB_{r}_SVC SET DEFAULT_ROLE=BB_{r} DEFAULT_WAREHOUSE=BB_WH")
+        if pub_key_str:
+            cur.execute(f"ALTER USER BB_{r}_SVC SET RSA_PUBLIC_KEY='{pub_key_str}'")
         cur.execute(f"GRANT ROLE BB_{r} TO USER BB_{r}_SVC")
-    print("ok  role users created (BB_*_SVC), admin user untouched")
+    print("ok  role users configured (BB_*_SVC with RSA key-pair), admin user untouched")
     conn.close()
 
 

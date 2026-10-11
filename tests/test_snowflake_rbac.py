@@ -6,6 +6,8 @@ import pathlib
 import sys
 
 import snowflake.connector
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import serialization
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -20,13 +22,40 @@ def load_env():
 
 
 ENV = load_env()
+KEY_PATH = ROOT / "snowflake" / "keys" / "rsa_key.p8"
+
+
+def _get_private_key_der():
+    if KEY_PATH.exists():
+        key_bytes = KEY_PATH.read_bytes()
+        p_key = serialization.load_pem_private_key(
+            key_bytes,
+            password=None,
+            backend=default_backend(),
+        )
+        return p_key.private_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    return None
+
+
+PRIVATE_KEY_DER = _get_private_key_der()
+assert PRIVATE_KEY_DER is not None, f"RSA 2048 PKCS#8 private key required at {KEY_PATH} for key-pair authentication"
+print(f"ok  loaded RSA PKCS#8 private key from {KEY_PATH} ({len(PRIVATE_KEY_DER)} DER bytes)")
 
 
 def connect(role):
-    return snowflake.connector.connect(
-        account=ENV["SNOWFLAKE_ACCOUNT"], user=f"BB_{role}_SVC",
-        password=ENV[f"SNOWFLAKE_BB_{role}_PASSWORD"], warehouse="BB_WH",
-        database="BEAN_BREW", schema="CORE")
+    conn_params = {
+        "account": ENV["SNOWFLAKE_ACCOUNT"],
+        "user": f"BB_{role}_SVC",
+        "warehouse": "BB_WH",
+        "database": "BEAN_BREW",
+        "schema": "CORE",
+        "private_key": PRIVATE_KEY_DER,
+    }
+    return snowflake.connector.connect(**conn_params)
 
 
 def q(role, sql, store=None, region=None):
