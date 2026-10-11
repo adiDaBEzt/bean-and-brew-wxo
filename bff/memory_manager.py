@@ -125,10 +125,39 @@ def format_fact(fact: Dict[str, Any]) -> str:
     return f"{entity} {attr}: {val}"
 
 
+def extract_heuristic_triples(text: str) -> List[Dict[str, Any]]:
+    """Fast zero-latency heuristic extraction for common coffee shop preferences."""
+    lowered = (text or "").lower()
+    heuristics = []
+    # Milk preference
+    for m in ["oat milk", "almond milk", "soy milk", "coconut milk", "skim milk", "whole milk", "dairy milk"]:
+        if m in lowered:
+            heuristics.append({"category": "preference", "entity": "milk", "attribute": "type", "value": m, "confidence": 0.95})
+            break
+    # Syrup preference
+    for s in ["vanilla", "caramel", "hazelnut", "sugar-free vanilla", "peppermint"]:
+        if f"{s} syrup" in lowered or f"{s} flavor" in lowered or f"with {s}" in lowered:
+            heuristics.append({"category": "preference", "entity": "syrup", "attribute": "flavor", "value": s, "confidence": 0.90})
+            break
+    # Roast preference
+    for r in ["light roast", "dark roast", "medium roast", "blonde roast", "espresso roast"]:
+        if r in lowered:
+            heuristics.append({"category": "preference", "entity": "roast", "attribute": "type", "value": r, "confidence": 0.90})
+            break
+    # Shift preference
+    for sh in ["morning", "evening", "night", "opening", "closing"]:
+        if f"{sh} shift" in lowered or f"prefer {sh}" in lowered:
+            heuristics.append({"category": "schedule", "entity": "shift", "attribute": "preferred", "value": sh, "confidence": 0.90})
+            break
+    return heuristics
+
+
 def extract_semantic_triples(text: str) -> List[Dict[str, Any]]:
     """Use self-hosted Qwen 2.5 7B to extract structured triples (category, entity, attribute, value)."""
     if not (text and text.strip()):
         return []
+
+    heuristics = extract_heuristic_triples(text)
 
     prompt = f"""You are a memory extraction system. Analyze the following dialogue and extract persistent user facts, preferences, constraints, or profile details.
 Extract each fact as an Entity-Attribute-Value (EAV) entry in JSON.
@@ -211,22 +240,24 @@ If there are no personal facts or preferences to extract, respond with []."""
             if isinstance(items, dict):
                 items = [items]
 
+            merged = {f"{h['category']}:{h['entity']}:{h['attribute']}": h for h in heuristics}
             if isinstance(items, list):
-                valid = []
                 for item in items:
                     if isinstance(item, dict) and item.get("entity") and item.get("value"):
-                        valid.append({
-                            "category": str(item.get("category", "preference")).strip().lower(),
-                            "entity": str(item.get("entity", "")).strip().lower(),
-                            "attribute": str(item.get("attribute", "type")).strip().lower(),
+                        cat = str(item.get("category", "preference")).strip().lower()
+                        ent = str(item.get("entity", "")).strip().lower()
+                        attr = str(item.get("attribute", "type")).strip().lower()
+                        merged[f"{cat}:{ent}:{attr}"] = {
+                            "category": cat,
+                            "entity": ent,
+                            "attribute": attr,
                             "value": str(item.get("value", "")).strip(),
                             "confidence": float(item.get("confidence", 1.0)),
-                        })
-                return valid
-            return []
+                        }
+            return list(merged.values())
     except Exception as e:
         print(f"[WARN] Qwen extraction error: {e}")
-        return []
+        return heuristics
 
 
 def get_embedder():
@@ -242,45 +273,45 @@ def get_embedder():
     return _embedder_instance if _embedder_instance is not False else None
 
 
-def get_memory_manager():
-    """Backward-compatible Mem0 instance."""
-    global _memory_instance
-    if _memory_instance is None:
-        try:
-            from mem0 import Memory
-            qdrant_dir = ROOT / "data" / "mem0_qdrant"
-            qdrant_dir.mkdir(parents=True, exist_ok=True)
+def delete_semantic_memory(
+    user_id: str,
+    category: str,
+    entity: str,
+    attribute: str,
+    db_path: pathlib.Path = DB_PATH,
+) -> bool:
+    """Delete a specific structured fact for this user in SQLite."""
+    db_path = pathlib.Path(db_path)
+    init_db(db_path)
+    with sqlite3.connect(str(db_path), timeout=10.0) as conn:
+        conn.execute("PRAGMA busy_timeout=10000;")
+        cur = conn.cursor()
+        cur.execute(
+            """
+            DELETE FROM semantic_memory
+            WHERE user_id = ? AND category = ? AND entity = ? AND attribute = ?
+            """,
+            (
+                (user_id or "").strip(),
+                (category or "preference").strip().lower(),
+                (entity or "").strip().lower(),
+                (attribute or "type").strip().lower(),
+            ),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
-            config = {
-                "vector_store": {
-                    "provider": "qdrant",
-                    "config": {
-                        "path": str(qdrant_dir),
-                        "collection_name": "bean_brew_user_memories",
-                        "embedding_model_dims": 384,
-                    },
-                },
-                "llm": {
-                    "provider": "openai",
-                    "config": {
-                        "model": QWEN_MODEL,
-                        "openai_base_url": "https://aditya-krishnan28--vllm-qwen-orchestrate-serve.modal.run/v1",
-                        "api_key": QWEN_API_KEY,
-                        "temperature": 0.1,
-                    },
-                },
-                "embedder": {
-                    "provider": "huggingface",
-                    "config": {
-                        "model": "sentence-transformers/all-MiniLM-L6-v2",
-                    },
-                },
-            }
-            _memory_instance = Memory.from_config(config)
-        except Exception as e:
-            print(f"[WARN] Mem0 initialization failed: {e}")
-            _memory_instance = None
-    return _memory_instance
+
+def clear_user_memories(user_id: str, db_path: pathlib.Path = DB_PATH) -> int:
+    """Delete all structured facts for this user in SQLite."""
+    db_path = pathlib.Path(db_path)
+    init_db(db_path)
+    with sqlite3.connect(str(db_path), timeout=10.0) as conn:
+        conn.execute("PRAGMA busy_timeout=10000;")
+        cur = conn.cursor()
+        cur.execute("DELETE FROM semantic_memory WHERE user_id = ?", ((user_id or "").strip(),))
+        conn.commit()
+        return cur.rowcount
 
 
 def search_user_memories(
@@ -289,17 +320,9 @@ def search_user_memories(
     limit: int = 5,
     db_path: pathlib.Path = DB_PATH,
 ) -> List[str]:
-    """Retrieve relevant long-term memories for this user using structured EAV + vector recall."""
+    """Retrieve relevant long-term memories for this user from SQLite using structured EAV + vector recall."""
     facts = get_user_semantic_facts(user_id, db_path=db_path)
     if not facts:
-        # Fallback to legacy Mem0 search if no structured facts exist yet
-        try:
-            mem = get_memory_manager()
-            if mem:
-                res = mem.search(query, filters={"user_id": user_id}, limit=limit)
-                return [r.get("memory") for r in res.get("results", []) if r.get("memory")]
-        except Exception:
-            pass
         return []
 
     generic_queries = {"", "all", "preferences", "facts", "preferences and facts"}

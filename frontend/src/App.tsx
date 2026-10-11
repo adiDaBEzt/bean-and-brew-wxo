@@ -20,6 +20,15 @@ interface UserProfile {
   dynamic_token: DynamicToken
 }
 
+interface SemanticFact {
+  category: string
+  entity: string
+  attribute: string
+  value: string
+  confidence: number
+  updated_at: string
+}
+
 interface Message {
   id: string
   role: 'user' | 'assistant'
@@ -42,7 +51,8 @@ const ROLE_SUGGESTIONS: Record<string, string[]> = {
   barista: [
     'Check low inventory for my store (S01)',
     'Can I see all employee salaries? (RBAC Block Test)',
-    'Remember that I prefer brewing light roasts with oat milk (Mem0 Test)',
+    'Remember that I prefer brewing light roasts with oat milk (SQL Memory Test)',
+    'Update my preference: I now use almond milk (SQL Conflict Resolution)',
   ],
   store_manager: [
     'Show team roster for Store S01',
@@ -74,7 +84,11 @@ export default function App() {
   const [threadId, setThreadId] = useState<string | null>(null)
   const [inspectAudit, setInspectAudit] = useState<any | null>(null)
   const [activeTab, setActiveTab] = useState<'tools' | 'memory' | 'token'>('tools')
-  const [longTermMemories, setLongTermMemories] = useState<string[]>([])
+  const [facts, setFacts] = useState<SemanticFact[]>([])
+  const [newEntity, setNewEntity] = useState('')
+  const [newAttr, setNewAttr] = useState('type')
+  const [newVal, setNewVal] = useState('')
+  const [memoryActionMsg, setMemoryActionMsg] = useState('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -98,7 +112,63 @@ export default function App() {
       const res = await fetch('/api/memory', { credentials: 'include' })
       if (res.ok) {
         const d = await res.json()
-        setLongTermMemories(d.memories || [])
+        setFacts(d.facts || [])
+      }
+    } catch {}
+  }
+
+  const handleClearMemory = async () => {
+    try {
+      const res = await fetch('/api/memory/clear', { method: 'POST', credentials: 'include' })
+      if (res.ok) {
+        setMemoryActionMsg('Cleared all SQLite memory rows.')
+        setTimeout(() => setMemoryActionMsg(''), 3000)
+        refreshMemories()
+      }
+    } catch {}
+  }
+
+  const handleDeleteFact = async (fact: SemanticFact) => {
+    try {
+      const res = await fetch('/api/memory/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category: fact.category,
+          entity: fact.entity,
+          attribute: fact.attribute,
+        }),
+        credentials: 'include',
+      })
+      if (res.ok) {
+        setMemoryActionMsg(`Deleted ${fact.entity} (${fact.attribute})`)
+        setTimeout(() => setMemoryActionMsg(''), 3000)
+        refreshMemories()
+      }
+    } catch {}
+  }
+
+  const handleManualUpsert = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newEntity.trim() || !newVal.trim()) return
+    try {
+      const res = await fetch('/api/memory/upsert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category: 'preference',
+          entity: newEntity.trim(),
+          attribute: newAttr.trim() || 'type',
+          value: newVal.trim(),
+        }),
+        credentials: 'include',
+      })
+      if (res.ok) {
+        setMemoryActionMsg(`Upserted: ${newEntity} -> ${newVal}`)
+        setTimeout(() => setMemoryActionMsg(''), 3000)
+        setNewEntity('')
+        setNewVal('')
+        refreshMemories()
       }
     } catch {}
   }
@@ -136,7 +206,7 @@ export default function App() {
     setUser(null)
     setMessages([])
     setThreadId(null)
-    setLongTermMemories([])
+    setFacts([])
   }
 
   const sendQuery = async (queryText: string) => {
@@ -173,6 +243,8 @@ export default function App() {
         }
         setMessages(prev => [...prev, botMsg])
         refreshMemories()
+        setTimeout(refreshMemories, 1500)
+        setTimeout(refreshMemories, 4000)
       } else {
         const err = await res.json()
         setMessages(prev => [
@@ -342,7 +414,7 @@ export default function App() {
           </div>
           <div className="tab-buttons">
             <button className={activeTab === 'tools' ? 'tab-btn active' : 'tab-btn'} onClick={() => setActiveTab('tools')}>Tool Audit</button>
-            <button className={activeTab === 'memory' ? 'tab-btn active' : 'tab-btn'} onClick={() => setActiveTab('memory')}>Mem0 ({longTermMemories.length})</button>
+            <button className={activeTab === 'memory' ? 'tab-btn active' : 'tab-btn'} onClick={() => setActiveTab('memory')}>SQL Memory ({facts.length})</button>
             <button className={activeTab === 'token' ? 'tab-btn active' : 'tab-btn'} onClick={() => setActiveTab('token')}>OAuth Token</button>
           </div>
 
@@ -357,17 +429,124 @@ export default function App() {
             )}
 
             {activeTab === 'memory' && (
-              <div>
-                <p className="drawer-desc">Persistent Semantic Facts in Mem0 for <strong>{user.username}</strong>:</p>
-                {longTermMemories.length === 0 ? (
-                  <p className="empty-note">No memories stored yet. Mention a syrup preference or schedule in chat!</p>
+              <div className="memory-tab-content">
+                <div className="memory-tab-header">
+                  <div className="sqlite-badge">
+                    <span className="sqlite-dot"></span>
+                    <span>SQLite 3 (data/semantic_memory.db)</span>
+                  </div>
+                  <div className="memory-controls">
+                    <button className="small-action-btn" onClick={refreshMemories} title="Refresh Table">
+                      🔄 Refresh
+                    </button>
+                    {facts.length > 0 && (
+                      <button className="small-action-btn danger" onClick={handleClearMemory} title="Clear All Rows">
+                        🗑️ Clear
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {memoryActionMsg && <div className="action-feedback-pill">{memoryActionMsg}</div>}
+
+                <p className="drawer-desc">
+                  Structured EAV table with atomic <code>ON CONFLICT DO UPDATE</code> (User: <strong>{user.username}</strong>):
+                </p>
+
+                {facts.length === 0 ? (
+                  <div className="empty-memory-box">
+                    <p className="empty-note">No rows in SQLite database yet.</p>
+                    <p className="empty-sub">Say <em>"Remember that I prefer brewing light roasts with oat milk"</em> or test manual upsert below!</p>
+                  </div>
                 ) : (
-                  <ul className="memory-list">
-                    {longTermMemories.map((mem, i) => (
-                      <li key={i} className="memory-item">🧠 {mem}</li>
-                    ))}
-                  </ul>
+                  <div className="table-responsive">
+                    <table className="sqlite-eav-table">
+                      <thead>
+                        <tr>
+                          <th>Entity</th>
+                          <th>Attribute</th>
+                          <th>Value</th>
+                          <th>Conf.</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {facts.map((f, i) => (
+                          <tr key={i}>
+                            <td><strong className="entity-cell">{f.entity}</strong></td>
+                            <td className="attr-cell">{f.attribute}</td>
+                            <td className="val-cell">{f.value}</td>
+                            <td className="conf-cell">{Math.round(f.confidence * 100)}%</td>
+                            <td>
+                              <button
+                                className="delete-row-btn"
+                                onClick={() => handleDeleteFact(f)}
+                                title="Delete row"
+                              >
+                                ✕
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
+
+                {/* Live SQL Conflict / Upsert Tester */}
+                <div className="upsert-test-card">
+                  <h5>⚡ Test Atomic SQL Conflict Resolution</h5>
+                  <p className="card-subtext">
+                    Insert or update an attribute (e.g. entity: <code>milk</code> $\to$ value: <code>almond milk</code>). SQLite replaces the value in-place without duplicate rows:
+                  </p>
+                  <form onSubmit={handleManualUpsert} className="upsert-inline-form">
+                    <input
+                      type="text"
+                      placeholder="Entity (e.g. milk)"
+                      value={newEntity}
+                      onChange={e => setNewEntity(e.target.value)}
+                      className="mini-input"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Attr (e.g. type)"
+                      value={newAttr}
+                      onChange={e => setNewAttr(e.target.value)}
+                      className="mini-input"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Value (e.g. oat milk)"
+                      value={newVal}
+                      onChange={e => setNewVal(e.target.value)}
+                      className="mini-input"
+                    />
+                    <button type="submit" className="mini-submit-btn">UPSERT</button>
+                  </form>
+                </div>
+
+                {/* SQL Schema Transparency Box */}
+                <details className="sql-schema-details">
+                  <summary>View SQL Table Schema & Query</summary>
+                  <pre className="schema-sql">
+{`CREATE TABLE semantic_memory (
+  user_id TEXT NOT NULL,
+  category TEXT NOT NULL,
+  entity TEXT NOT NULL,
+  attribute TEXT NOT NULL,
+  value TEXT NOT NULL,
+  confidence REAL DEFAULT 1.0,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, category, entity, attribute)
+);
+
+-- Atomic Conflict Target (No Duplicates)
+INSERT INTO semantic_memory (user_id, category, entity, attribute, value)
+VALUES ('${user.username}', 'preference', 'milk', 'type', 'almond milk')
+ON CONFLICT (user_id, category, entity, attribute)
+DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP;`}
+                  </pre>
+                </details>
               </div>
             )}
 

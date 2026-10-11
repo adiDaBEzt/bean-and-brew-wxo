@@ -21,11 +21,16 @@ from jose import JWTError, jwt
 from pydantic import BaseModel
 
 from bff.memory_manager import (
+    clear_user_memories,
+    delete_semantic_memory,
+    extract_heuristic_triples,
+    format_fact,
     get_embedder,
     get_user_semantic_facts,
     init_db,
     record_user_memory,
     search_user_memories,
+    upsert_semantic_memory,
 )
 from bff.oauth_broker import token_broker
 
@@ -217,18 +222,86 @@ def logout(response: Response):
     return {"status": "logged_out"}
 
 
+class DeleteMemoryRequest(BaseModel):
+    category: Optional[str] = "preference"
+    entity: str
+    attribute: Optional[str] = "type"
+
+
+class UpsertMemoryRequest(BaseModel):
+    category: Optional[str] = "preference"
+    entity: str
+    attribute: Optional[str] = "type"
+    value: str
+
+
 @app.get("/api/memory")
 def get_memories(user: dict = Depends(get_current_user)):
     user_id = user["username"]
-    memories = search_user_memories(user_id=user_id, query="preferences and facts", limit=20)
     facts = get_user_semantic_facts(user_id=user_id)
-    return {"user_id": user_id, "memories": memories, "facts": facts}
+    memories = [format_fact(f) for f in facts]
+    return {
+        "user_id": user_id,
+        "facts": facts,
+        "memories": memories,
+        "count": len(facts),
+        "db": "SQLite EAV Store (data/semantic_memory.db)",
+    }
+
+
+@app.post("/api/memory/clear")
+def clear_memories(user: dict = Depends(get_current_user)):
+    user_id = user["username"]
+    cleared = clear_user_memories(user_id=user_id)
+    return {"status": "ok", "cleared_count": cleared}
+
+
+@app.post("/api/memory/delete")
+def delete_memory(req: DeleteMemoryRequest, user: dict = Depends(get_current_user)):
+    user_id = user["username"]
+    ok = delete_semantic_memory(
+        user_id=user_id,
+        category=req.category or "preference",
+        entity=req.entity,
+        attribute=req.attribute or "type",
+    )
+    facts = get_user_semantic_facts(user_id=user_id)
+    return {"status": "ok" if ok else "not_found", "facts": facts}
+
+
+@app.post("/api/memory/upsert")
+def upsert_memory(req: UpsertMemoryRequest, user: dict = Depends(get_current_user)):
+    user_id = user["username"]
+    upsert_semantic_memory(
+        user_id=user_id,
+        category=req.category or "preference",
+        entity=req.entity,
+        attribute=req.attribute or "type",
+        value=req.value,
+        confidence=1.0,
+    )
+    facts = get_user_semantic_facts(user_id=user_id)
+    memories = [format_fact(f) for f in facts]
+    return {"status": "ok", "facts": facts, "memories": memories}
 
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
-    # 1. Retrieve relevant long-term memories from Structured Semantic Memory
     user_id = user["username"]
+
+    # 0. Instant heuristic extraction: upsert common preferences immediately (0ms)
+    instant_triples = extract_heuristic_triples(req.message)
+    for t in instant_triples:
+        upsert_semantic_memory(
+            user_id=user_id,
+            category=t["category"],
+            entity=t["entity"],
+            attribute=t["attribute"],
+            value=t["value"],
+            confidence=t.get("confidence", 0.95),
+        )
+
+    # 1. Retrieve relevant long-term memories from Structured Semantic Memory in SQLite
     recalled_memories = []
     try:
         recalled_memories = await asyncio.wait_for(
