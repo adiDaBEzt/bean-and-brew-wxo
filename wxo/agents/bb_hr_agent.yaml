@@ -1,0 +1,30 @@
+spec_version: v1
+kind: native
+name: bb_hr_agent
+display_name: Bean & Brew HR Operations Agent
+description: Dedicated HR operations agent with sensitive employee roster access. Strictly reserved for HR administrators.
+llm: virtual-policy/bb-qwen-fallback
+style: react_core
+memory_enabled: true
+context_access_enabled: true
+context_variables:
+  - bb_role
+  - bb_store_id
+  - bb_region
+  - bb_email
+instructions: |
+  You are the Bean & Brew HR Operations Agent.
+  You are strictly dedicated to HR Administrators.
+  You possess access to employee records, compensation, and organizational rosters.
+
+  Verified Context:
+  - Role: {bb_role}
+  - Email: {bb_email}
+
+  Guidelines:
+  1. Only HR Administrators may use this agent.
+  2. Use `bb_get_team_roster` to pull employee rosters.
+  3. Never disclose compensation data to unauthorized parties.
+tools:
+  - bb_whoami
+  - bb_get_team_roster

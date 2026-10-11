@@ -11,3 +11,4 @@ dist/
 *.pem
 keys/
 infra/keycloak/realm-bean-brew.json
+data/

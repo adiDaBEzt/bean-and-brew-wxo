@@ -1,16 +1,14 @@
-"""FastAPI Backend-For-Frontend (BFF) for Bean & Brew.
+"""FastAPI Backend-For-Frontend (BFF) with Agent RBAC, Mem0 Long-Term Memory, and Dynamic OAuth Tokens.
 
-Security Architecture:
-  1. Authenticates employees against Keycloak OIDC.
-  2. Extracts verified user claims: role, store_id, region, email.
-  3. Mints secure session tokens for frontend client.
-  4. Proxies requests to watsonx Orchestrate Runs API using backend service IAM credentials.
-  5. Injects tamper-proof context variables (bb_role, bb_store_id, bb_region, bb_email)
-     so the agent and Snowflake tools strictly enforce RBAC and row-level access control.
+Key Capabilities:
+  1. Multi-Agent RBAC: Only authorized roles can route to specialized agents (e.g., HR agent restricted to hr_admin).
+  2. Mem0 Long-Term Memory: Cross-session semantic memory isolation keyed to user identity.
+  3. Dynamic Token Broker: Ephemeral role-scoped credentials issued per session.
+  4. watsonx Orchestrate Runs API: Tamper-proof context variable injection.
 """
 import os
 import pathlib
-import time
+import time, asyncio
 from typing import Dict, List, Optional
 
 import httpx
@@ -20,10 +18,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from jose import JWTError, jwt
 from pydantic import BaseModel
 
+from bff.memory_manager import record_user_memory, search_user_memories
+from bff.oauth_broker import token_broker
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 
-# Config
 KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://localhost:8080")
 KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "bean-brew")
 KEYCLOAK_CLIENT_ID = os.getenv("KEYCLOAK_CLIENT_ID", "bb-web")
@@ -32,13 +32,33 @@ DEMO_USER_PASSWORD = os.getenv("DEMO_USER_PASSWORD", "")
 
 WXO_URL = os.getenv("WXO_URL", "")
 WXO_API_KEY = os.getenv("WXO_API_KEY", "")
-AGENT_ID = "625b0516-9857-4c1f-a854-873e13f3197d"
-AGENT_NAME = "bb_assistant"
+
+# Registered Agent Catalog
+AGENTS_CATALOG = {
+    "bb_assistant": {
+        "id": "625b0516-9857-4c1f-a854-873e13f3197d",
+        "name": "bb_assistant",
+        "title": "General Operations Assistant",
+        "allowed_roles": ["barista", "store_manager", "regional_manager", "finance_analyst", "hr_admin"],
+    },
+    "bb_hr_agent": {
+        "id": "4dfacfc3-780d-4fae-aabb-fc323a1b4476",
+        "name": "bb_hr_agent",
+        "title": "HR Operations & Personnel Agent",
+        "allowed_roles": ["hr_admin"],
+    },
+    "bb_finance_agent": {
+        "id": "0d3fc642-6016-405e-a0a5-75bb01dc24f5",
+        "name": "bb_finance_agent",
+        "title": "Financial Analytics & Compensation Agent",
+        "allowed_roles": ["finance_analyst"],
+    },
+}
 
 JWT_SECRET = os.getenv("BFF_JWT_SECRET", "bb-dev-secret-key-38291048123912093")
 JWT_ALGORITHM = "HS256"
 
-app = FastAPI(title="Bean & Brew BFF API", version="1.0.0")
+app = FastAPI(title="Bean & Brew Enterprise BFF API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -48,7 +68,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory IAM token cache
 _iam_token_cache: Dict[str, any] = {"token": None, "expires_at": 0}
 
 
@@ -90,16 +109,19 @@ class UserProfile(BaseModel):
     role: str
     store_id: str
     region: str
+    accessible_agents: List[dict]
+    dynamic_token: dict
 
 
 class ChatRequest(BaseModel):
     message: str
+    agent_name: Optional[str] = "bb_assistant"
     thread_id: Optional[str] = None
 
 
 def create_session_token(profile: dict) -> str:
     payload = profile.copy()
-    payload["exp"] = int(time.time()) + 86400  # 24h
+    payload["exp"] = int(time.time()) + 86400
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
@@ -113,14 +135,32 @@ def get_current_user(bb_session: Optional[str] = Cookie(None)) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
 
 
+def get_accessible_agents_for_role(role: str) -> List[dict]:
+    accessible = []
+    for k, a in AGENTS_CATALOG.items():
+        if role in a["allowed_roles"]:
+            accessible.append({"name": a["name"], "title": a["title"], "id": a["id"]})
+    return accessible
+
+
 @app.get("/api/auth/me", response_model=UserProfile)
 def get_me(user: dict = Depends(get_current_user)):
+    role = user.get("role", "")
+    accessible = get_accessible_agents_for_role(role)
+    dyn_token = token_broker.mint_token(
+        username=user.get("username", ""),
+        role=role,
+        store_id=user.get("store_id", ""),
+        region=user.get("region", ""),
+    )
     return UserProfile(
         username=user.get("username", ""),
         email=user.get("email", ""),
-        role=user.get("role", ""),
+        role=role,
         store_id=user.get("store_id", ""),
         region=user.get("region", ""),
+        accessible_agents=accessible,
+        dynamic_token=dyn_token,
     )
 
 
@@ -128,7 +168,7 @@ def get_me(user: dict = Depends(get_current_user)):
 async def login(req: LoginRequest, response: Response):
     pw = req.password or DEMO_USER_PASSWORD
     token_url = f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/token"
-    
+
     async with httpx.AsyncClient() as client:
         res = await client.post(
             token_url,
@@ -168,7 +208,14 @@ async def login(req: LoginRequest, response: Response):
         samesite="lax",
         max_age=86400,
     )
-    return profile
+    accessible = get_accessible_agents_for_role(primary_role)
+    dyn_token = token_broker.mint_token(
+        username=profile["username"],
+        role=primary_role,
+        store_id=profile["store_id"],
+        region=profile["region"],
+    )
+    return {**profile, "accessible_agents": accessible, "dynamic_token": dyn_token}
 
 
 @app.post("/api/auth/logout")
@@ -177,27 +224,67 @@ def logout(response: Response):
     return {"status": "logged_out"}
 
 
+@app.get("/api/memory")
+def get_memories(user: dict = Depends(get_current_user)):
+    """Retrieve long-term semantic memories stored for the active user via Mem0."""
+    user_id = user["username"]
+    memories = search_user_memories(user_id=user_id, query="preferences and facts", limit=10)
+    return {"user_id": user_id, "memories": memories}
+
+
 @app.post("/api/chat")
 async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
+    target_agent_name = req.agent_name or "bb_assistant"
+    agent_spec = AGENTS_CATALOG.get(target_agent_name)
+
+    if not agent_spec:
+        raise HTTPException(status_code=400, detail=f"Agent '{target_agent_name}' does not exist")
+
+    # 1. Multi-Agent Access Control (RBAC check at agent entry)
+    if user["role"] not in agent_spec["allowed_roles"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access Denied: Your role '{user['role']}' is not permitted to access agent '{agent_spec['title']}'. Required roles: {agent_spec['allowed_roles']}.",
+        )
+
+    # 2. Retrieve relevant long-term memories via Mem0
+    user_id = user["username"]
+    recalled_memories = search_user_memories(user_id=user_id, query=req.message, limit=3)
+    memory_context_str = ""
+    if recalled_memories:
+        memory_context_str = "\n[Persistent User Long-Term Memory]:\n" + "\n".join(f"- {m}" for m in recalled_memories)
+
+    # 3. Dynamic Ephemeral Token
+    dyn_token = token_broker.mint_token(
+        username=user["username"],
+        role=user["role"],
+        store_id=user["store_id"],
+        region=user["region"],
+    )
+
+    augmented_prompt = req.message
+    if memory_context_str:
+        augmented_prompt = f"{req.message}\n{memory_context_str}"
+
     iam_token = await get_wxo_iam_token()
     headers = {
         "Authorization": f"Bearer {iam_token}",
         "Content-Type": "application/json",
     }
 
-    # Strict RBAC context injected from validated session cookie
     payload = {
-        "agent_id": AGENT_ID,
-        "agent_name": AGENT_NAME,
+        "agent_id": agent_spec["id"],
+        "agent_name": agent_spec["name"],
         "message": {
             "role": "user",
-            "content": req.message,
+            "content": augmented_prompt,
         },
         "context": {
             "bb_role": user["role"],
             "bb_store_id": user["store_id"],
             "bb_region": user["region"],
             "bb_email": user["email"],
+            "bb_dynamic_token": dyn_token["token"],
         },
     }
     if req.thread_id:
@@ -221,9 +308,8 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
         run_id = run_data.get("run_id")
         thread_id = run_data.get("thread_id")
 
-        # Poll run status to completion
-        for _ in range(25):
-            await httpx.AsyncClient().get("http://localhost:8000/health") # yield
+        for _ in range(60):
+            await asyncio.sleep(2)
             status_res = await client.get(
                 f"{WXO_URL}/v1/orchestrate/runs/{run_id}",
                 headers=headers,
@@ -247,18 +333,24 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
                         for sd in step.get("step_details", []):
                             steps.append(sd)
 
+                    # 4. Asynchronously record new preference/fact in Mem0
+                    record_user_memory(user_id=user_id, text=f"User said: {req.message}. Assistant replied: {reply_text}")
+
                     return {
                         "thread_id": thread_id,
                         "run_id": run_id,
                         "reply": reply_text,
                         "steps": steps,
+                        "agent_used": agent_spec["title"],
+                        "recalled_memories": recalled_memories,
+                        "dynamic_token": dyn_token,
                         "user": user,
                     }
-            time.sleep(2)
+            
 
     raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Agent run timed out")
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "app": "Bean & Brew BFF"}
+    return {"status": "ok", "app": "Bean & Brew Enterprise BFF"}
