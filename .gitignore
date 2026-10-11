@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+venv/
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+dist/
+.DS_Store
+*.pem
+keys/
+infra/keycloak/realm-bean-brew.json

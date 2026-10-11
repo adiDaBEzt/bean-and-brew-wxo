@@ -1,0 +1,14 @@
+spec_version: v1
+kind: model
+name: bb-qwen-fallback
+display_name: Bean & Brew model policy (Qwen vLLM -> Qwen Ollama)
+description: Fallback policy. Primary is self-hosted Qwen on vLLM; on upstream failure it fails over to Qwen on Ollama.
+policy:
+  strategy:
+    mode: fallback
+  retry:
+    attempts: 1
+    on_status_codes: [429, 500, 502, 503, 504]
+  targets:
+    - model_name: virtual-model/openai/Qwen/Qwen2.5-7B-Instruct
+    - model_name: virtual-model/ollama/qwen2.5:7b

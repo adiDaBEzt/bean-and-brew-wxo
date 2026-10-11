@@ -1,0 +1,13 @@
+spec_version: v1
+kind: model
+name: virtual-model/ollama/qwen2.5:7b
+display_name: Qwen 2.5 7B (Ollama on Modal) - secondary
+description: Self-hosted Qwen 2.5 7B served by Ollama on Modal.
+tags: [qwen, modal, ollama, self-hosted]
+model_type: chat
+provider_config:
+  custom_host: https://aditya-krishnan28--ollama-qwen-orchestrate-serve.modal.run
+  api_key: ollama
+config:
+  max_completion_tokens: 1500
+  temperature: 0.0

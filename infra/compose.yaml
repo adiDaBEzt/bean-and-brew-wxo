@@ -1,0 +1,14 @@
+name: bean-and-brew
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: bb-keycloak
+    command: ["start-dev", "--import-realm", "--http-port=8080"]
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      JAVA_OPTS_KC_HEAP: "-Xms256m -Xmx768m"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./keycloak/realm-bean-brew.json:/opt/keycloak/data/import/realm-bean-brew.json:ro,Z
