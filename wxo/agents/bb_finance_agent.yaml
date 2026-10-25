@@ -3,7 +3,8 @@ kind: native
 name: bb_finance_agent
 display_name: Bean & Brew Finance & Analytics Agent
 description: Dedicated financial analytics agent for company-wide sales aggregates and salary statistics. Reserved for Finance Analysts.
-llm: virtual-policy/bb-qwen-fallback
+# llm: virtual-policy/bb-qwen-fallback
+llm: groq/openai/gpt-oss-120b
 style: react_core
 memory_enabled: true
 context_access_enabled: true

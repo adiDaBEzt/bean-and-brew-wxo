@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import './App.css'
 
 interface DynamicToken {
@@ -20,59 +22,47 @@ interface UserProfile {
   dynamic_token: DynamicToken
 }
 
-interface SemanticFact {
-  category: string
-  entity: string
-  attribute: string
-  value: string
-  confidence: number
-  updated_at: string
-}
-
 interface Message {
   id: string
   role: 'user' | 'assistant'
   content: string
   steps?: any[]
-  recalled_memories?: string[]
   agent_used?: string
   timestamp: string
 }
 
 const DEMO_PERSONAS = [
-  { username: 'maya', name: 'Maya Chen', role: 'barista', store: 'S01', badge: 'Barista (Store S01)' },
-  { username: 'sam', name: 'Sam Rivera', role: 'store_manager', store: 'S01', badge: 'Store Manager (S01)' },
-  { username: 'priya', name: 'Priya Nair', role: 'regional_manager', store: 'HQ', badge: 'Regional Mgr (North)' },
-  { username: 'felix', name: 'Felix Weber', role: 'finance_analyst', store: 'HQ', badge: 'Finance Analyst' },
-  { username: 'hana', name: 'Hana Sato', role: 'hr_admin', store: 'HQ', badge: 'HR Administrator' },
+  { username: 'maya', name: 'Maya Chen', role: 'barista', store: 'S01', badge: 'Barista (Store S01)', icon: '☕' },
+  { username: 'sam', name: 'Sam Rivera', role: 'store_manager', store: 'S01', badge: 'Store Manager (S01)', icon: '📋' },
+  { username: 'priya', name: 'Priya Nair', role: 'regional_manager', store: 'HQ', badge: 'Regional Mgr (North)', icon: '📊' },
+  { username: 'felix', name: 'Felix Weber', role: 'finance_analyst', store: 'HQ', badge: 'Finance Analyst', icon: '💼' },
+  { username: 'hana', name: 'Hana Sato', role: 'hr_admin', store: 'HQ', badge: 'HR Administrator', icon: '👥' },
 ]
 
 const ROLE_SUGGESTIONS: Record<string, string[]> = {
   barista: [
     'Check low inventory for my store (S01)',
-    'Can I see all employee salaries? (RBAC Block Test)',
-    'Remember that I prefer brewing light roasts with oat milk (SQL Memory Test)',
-    'Update my preference: I now use almond milk (SQL Conflict Resolution)',
+    'Can I see all employee salaries? (Zero Trust Test)',
+    'Show recipe for Artisan Oat Milk Latte',
   ],
   store_manager: [
     'Show team roster for Store S01',
-    'Restock Oat Milk (SKU-OAT-001) by 25 units',
+    'Restock Espresso Beans (SKU001) by 25 units',
     'Summarize sales revenue for Store S01',
   ],
   regional_manager: [
-    'Summarize sales across all stores in the North region',
-    'List store managers across my region',
+    'Summarize sales across all stores in North region',
     'Which store has the lowest inventory levels?',
+    'List store managers in my region',
   ],
   finance_analyst: [
-    'Provide salary summary and budget breakdown for Store S01',
-    'Show total sales revenue for all stores',
-    'Analyze inventory costs across regions',
+    'Show company salary statistics and headcount',
+    'Show total sales revenue grouped by product',
+    'Analyze budget breakdown across regions',
   ],
   hr_admin: [
     'Show full employee roster across all stores',
-    'List all baristas working at Store S01',
-    'Audit staff distribution across regions',
+    'List all baristas assigned to Store S01',
   ],
 }
 
@@ -83,13 +73,46 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [threadId, setThreadId] = useState<string | null>(null)
   const [inspectAudit, setInspectAudit] = useState<any | null>(null)
-  const [activeTab, setActiveTab] = useState<'tools' | 'memory' | 'token'>('tools')
-  const [facts, setFacts] = useState<SemanticFact[]>([])
-  const [newEntity, setNewEntity] = useState('')
-  const [newAttr, setNewAttr] = useState('type')
-  const [newVal, setNewVal] = useState('')
-  const [memoryActionMsg, setMemoryActionMsg] = useState('')
+  const [activeTab, setActiveTab] = useState<'audit' | 'identity' | 'memory'>('audit')
+  const [memories, setMemories] = useState<any[]>([])
   const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  const refreshMemories = async () => {
+    try {
+      const res = await fetch('/api/memory', { credentials: 'include' })
+      if (res.ok) {
+        const data = await res.json()
+        setMemories(data.facts || [])
+      }
+    } catch {}
+  }
+
+  const handleDeleteMemory = async (entity: string) => {
+    try {
+      const res = await fetch('/api/memory/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entity }),
+        credentials: 'include'
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setMemories(data.facts || [])
+      }
+    } catch {}
+  }
+
+  const handleClearMemory = async () => {
+    try {
+      const res = await fetch('/api/memory/clear', {
+        method: 'POST',
+        credentials: 'include'
+      })
+      if (res.ok) {
+        setMemories([])
+      }
+    } catch {}
+  }
 
   useEffect(() => {
     fetch('/api/auth/me', { credentials: 'include' })
@@ -107,72 +130,6 @@ export default function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, loading])
 
-  const refreshMemories = async () => {
-    try {
-      const res = await fetch('/api/memory', { credentials: 'include' })
-      if (res.ok) {
-        const d = await res.json()
-        setFacts(d.facts || [])
-      }
-    } catch {}
-  }
-
-  const handleClearMemory = async () => {
-    try {
-      const res = await fetch('/api/memory/clear', { method: 'POST', credentials: 'include' })
-      if (res.ok) {
-        setMemoryActionMsg('Cleared all SQLite memory rows.')
-        setTimeout(() => setMemoryActionMsg(''), 3000)
-        refreshMemories()
-      }
-    } catch {}
-  }
-
-  const handleDeleteFact = async (fact: SemanticFact) => {
-    try {
-      const res = await fetch('/api/memory/delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          category: fact.category,
-          entity: fact.entity,
-          attribute: fact.attribute,
-        }),
-        credentials: 'include',
-      })
-      if (res.ok) {
-        setMemoryActionMsg(`Deleted ${fact.entity} (${fact.attribute})`)
-        setTimeout(() => setMemoryActionMsg(''), 3000)
-        refreshMemories()
-      }
-    } catch {}
-  }
-
-  const handleManualUpsert = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!newEntity.trim() || !newVal.trim()) return
-    try {
-      const res = await fetch('/api/memory/upsert', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          category: 'preference',
-          entity: newEntity.trim(),
-          attribute: newAttr.trim() || 'type',
-          value: newVal.trim(),
-        }),
-        credentials: 'include',
-      })
-      if (res.ok) {
-        setMemoryActionMsg(`Upserted: ${newEntity} -> ${newVal}`)
-        setTimeout(() => setMemoryActionMsg(''), 3000)
-        setNewEntity('')
-        setNewVal('')
-        refreshMemories()
-      }
-    } catch {}
-  }
-
   const handleLogin = async (username: string) => {
     setLoading(true)
     try {
@@ -185,16 +142,16 @@ export default function App() {
       if (res.ok) {
         const u = await res.json()
         setUser(u)
+        refreshMemories()
         setMessages([
           {
             id: 'welcome',
             role: 'assistant',
-            content: `☕ **Welcome ${u.username}!**\n\nAuthenticated via Keycloak SSO as **${u.role}** (Store **${u.store_id}**, Region **${u.region}**).\n\nYou are connected to the **Bean & Brew Master Operations Agent** with Zero Trust Multi-Agent RBAC.\nEphemeral Snowflake OAuth Token: \`${u.dynamic_token?.token?.slice(0, 16)}...\` (Valid for 300s).`,
+            content: `☕ **Welcome ${u.username}!**\n\nAuthenticated via **Keycloak SSO** as **${u.role}** (Store **${u.store_id}**, Region **${u.region}**).\n\nYou are connected to the **Bean & Brew Master Operations Agent** with Zero Trust Multi-Agent Collaborators (\`bb_hr_agent\`, \`bb_finance_agent\`) and native session memory.\n\n*Ephemeral Snowflake OAuth Token: \`${u.dynamic_token?.token?.slice(0, 16)}...\` (Valid for 300s).*`,
             timestamp: new Date().toLocaleTimeString()
           }
         ])
         setThreadId(null)
-        refreshMemories()
       }
     } finally {
       setLoading(false)
@@ -206,7 +163,8 @@ export default function App() {
     setUser(null)
     setMessages([])
     setThreadId(null)
-    setFacts([])
+    setInspectAudit(null)
+    setMemories([])
   }
 
   const sendQuery = async (queryText: string) => {
@@ -237,14 +195,19 @@ export default function App() {
           role: 'assistant',
           content: data.reply,
           steps: data.steps,
-          recalled_memories: data.recalled_memories,
           agent_used: data.agent_used,
           timestamp: new Date().toLocaleTimeString()
         }
         setMessages(prev => [...prev, botMsg])
-        refreshMemories()
-        setTimeout(refreshMemories, 1500)
-        setTimeout(refreshMemories, 4000)
+        if (data.memories) {
+          setMemories(data.memories)
+        }
+        setInspectAudit({
+          steps: data.steps,
+          agent_used: data.agent_used,
+          thread_id: data.thread_id,
+          token: data.dynamic_token
+        })
       } else {
         const err = await res.json()
         setMessages(prev => [
@@ -275,30 +238,56 @@ export default function App() {
   if (!user) {
     return (
       <div className="login-screen">
-        <div className="login-card">
-          <div className="logo-badge">☕ Bean & Brew</div>
-          <h2>Enterprise Zero Trust AI Portal</h2>
-          <p className="subtitle">
-            IBM watsonx Orchestrate Multi-Agent Router with Keycloak SSO, Ephemeral Snowflake OAuth Tokens & Mem0 Long-Term Memory.
-          </p>
-
-          <div className="persona-selection">
-            <h4>Select an authenticated employee persona:</h4>
-            <div className="persona-grid">
-              {DEMO_PERSONAS.map(p => (
-                <button
-                  key={p.username}
-                  className="persona-btn"
-                  onClick={() => handleLogin(p.username)}
-                  disabled={loading}
-                >
-                  <div className="p-title">{p.name}</div>
-                  <div className="p-badge">{p.badge}</div>
-                </button>
-              ))}
+        <div className="login-hero-card">
+          <div className="hero-visual-pane">
+            <img src="/hero.jpg" alt="Bean & Brew Coffee Bar" className="hero-banner-image" />
+            <div className="hero-gradient-overlay">
+              <span className="hero-subtitle-tag">ENTERPRISE MULTI-AGENT PLATFORM</span>
+              <h3>Artisan Roastery Operations</h3>
+              <p>
+                IBM Watsonx Orchestrate • Zero Trust Collaborator Routing • Snowflake RSA Key-Pair Security
+              </p>
             </div>
           </div>
-          {loading && <p className="status-note">Authenticating via Keycloak & minting dynamic credentials...</p>}
+
+          <div className="login-form-pane">
+            <div className="brand-header-box">
+              <img src="/logo.jpg" alt="Bean & Brew Logo" className="login-logo-img" />
+              <div>
+                <h2>Bean & Brew AI Portal</h2>
+                <p className="subtitle">
+                  Select an authenticated persona to test role-based access, collaborator routing, and ephemeral tokens.
+                </p>
+              </div>
+            </div>
+
+            <div className="persona-selection">
+              <h4>Select Employee Persona:</h4>
+              <div className="persona-grid">
+                {DEMO_PERSONAS.map(p => (
+                  <button
+                    key={p.username}
+                    className="persona-btn"
+                    onClick={() => handleLogin(p.username)}
+                    disabled={loading}
+                  >
+                    <div className="persona-top">
+                      <span className="persona-icon">{p.icon}</span>
+                      <span className="p-title">{p.name}</span>
+                    </div>
+                    <div className="p-badge">{p.badge}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {loading && (
+              <div className="login-status-pill">
+                <span className="status-spinner"></span>
+                <span>Authenticating with Keycloak & initializing session...</span>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     )
@@ -308,13 +297,16 @@ export default function App() {
 
   return (
     <div className="app-container">
-      {/* Header */}
+      {/* App Header */}
       <header className="app-header">
         <div className="header-brand">
-          <span className="logo-icon">☕</span>
-          <div>
-            <h3>Bean & Brew AI Portal</h3>
-            <span className="model-tag">Master Agent Router (Qwen 2.5 7B on Modal vLLM → Ollama)</span>
+          <img src="/logo.jpg" alt="Bean & Brew Logo" className="header-logo-img" />
+          <div className="brand-info">
+            <div className="title-row">
+              <h3>Bean & Brew</h3>
+              <span className="artisan-badge">Operations AI</span>
+            </div>
+            <span className="model-tag">Master Operations Agent • Multi-Agent Collaborators • Snowflake RSA</span>
           </div>
         </div>
 
@@ -325,7 +317,7 @@ export default function App() {
           </div>
 
           <div className="user-meta">
-            <span className="user-name">{user.username}</span>
+            <span className="user-name">👤 {user.username}</span>
             <span className="role-pill">{user.role}</span>
             <span className="store-pill">Store {user.store_id}</span>
           </div>
@@ -333,7 +325,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main chat layout */}
+      {/* Main Chat Layout */}
       <div className="chat-layout">
         <div className="chat-main">
           <div className="message-list">
@@ -341,17 +333,17 @@ export default function App() {
               <div key={m.id} className={`message-bubble ${m.role}`}>
                 <div className="bubble-header">
                   <span className="author">
-                    {m.role === 'user' ? user.username : (m.agent_used || 'Master Agent')}
+                    {m.role === 'user' ? user.username : (m.agent_used || 'Master Operations Agent')}
                   </span>
                   <span className="time">{m.timestamp}</span>
                 </div>
-                <div className="bubble-content" style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>
 
-                {m.recalled_memories && m.recalled_memories.length > 0 && (
-                  <div className="memory-badge-strip">
-                    🧠 Recalled Mem0 Fact: <em>"{m.recalled_memories[0]}"</em>
-                  </div>
-                )}
+                {/* Rendered Markdown Body with HTML Tables */}
+                <div className="bubble-content markdown-body">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {m.content}
+                  </ReactMarkdown>
+                </div>
 
                 {m.steps && m.steps.length > 0 && (
                   <div className="bubble-footer">
@@ -360,18 +352,20 @@ export default function App() {
                       onClick={() => {
                         setInspectAudit({
                           steps: m.steps,
-                          recalled: m.recalled_memories,
+                          agent_used: m.agent_used,
+                          thread_id: threadId,
                           token: user.dynamic_token
                         })
-                        setActiveTab('tools')
+                        setActiveTab('audit')
                       }}
                     >
-                      🔍 Inspect Zero Trust Audit ({m.steps.length} Tool Calls)
+                      🔍 Inspect Agent Routing & Tool Audit
                     </button>
                   </div>
                 )}
               </div>
             ))}
+
             {loading && (
               <div className="message-bubble assistant loading-indicator">
                 <span className="dots">☕ Master Agent reasoning & evaluating Zero Trust policies...</span>
@@ -395,10 +389,11 @@ export default function App() {
             ))}
           </div>
 
+          {/* Chat Input Bar */}
           <form className="input-bar" onSubmit={(e) => { e.preventDefault(); sendQuery(input); }}>
             <input
               type="text"
-              placeholder={`Ask Master Agent as ${user.role} (e.g. inventory, sales, roster)...`}
+              placeholder={`Ask Master Agent as ${user.role} (e.g. inventory, team roster, sales statistics)...`}
               value={input}
               onChange={e => setInput(e.target.value)}
               disabled={loading}
@@ -407,158 +402,212 @@ export default function App() {
           </form>
         </div>
 
-        {/* Audit Inspector Drawer */}
+        {/* Minimal Clean Inspector Drawer */}
         <aside className="audit-drawer">
           <div className="drawer-header">
-            <h4>Security & Memory Inspector</h4>
+            <h4>Agent & Security Inspector</h4>
           </div>
+
           <div className="tab-buttons">
-            <button className={activeTab === 'tools' ? 'tab-btn active' : 'tab-btn'} onClick={() => setActiveTab('tools')}>Tool Audit</button>
-            <button className={activeTab === 'memory' ? 'tab-btn active' : 'tab-btn'} onClick={() => setActiveTab('memory')}>SQL Memory ({facts.length})</button>
-            <button className={activeTab === 'token' ? 'tab-btn active' : 'tab-btn'} onClick={() => setActiveTab('token')}>OAuth Token</button>
+            <button
+              className={activeTab === 'audit' ? 'tab-btn active' : 'tab-btn'}
+              onClick={() => setActiveTab('audit')}
+            >
+              Execution Audit
+            </button>
+            <button
+              className={activeTab === 'identity' ? 'tab-btn active' : 'tab-btn'}
+              onClick={() => setActiveTab('identity')}
+            >
+              Identity & Token
+            </button>
+            <button
+              className={activeTab === 'memory' ? 'tab-btn active' : 'tab-btn'}
+              onClick={() => setActiveTab('memory')}
+            >
+              🧠 Memory {memories.length > 0 && `(${memories.length})`}
+            </button>
           </div>
 
           <div className="drawer-body">
-            {activeTab === 'tools' && (
-              <div>
-                <p className="drawer-desc">Real-time WXO execution traces & tool parameters:</p>
-                <pre className="audit-json">
-                  {JSON.stringify(inspectAudit?.steps || "Click 'Inspect Zero Trust Audit' on any assistant message to view execution traces.", null, 2)}
-                </pre>
+            {activeTab === 'audit' && (
+              <div className="audit-tab-content">
+                <div className="inspector-card">
+                  <div className="card-label">Active Orchestrator:</div>
+                  <div className="card-val">
+                    <strong>bb_master_agent</strong>
+                  </div>
+                  <div className="card-sub">
+                    Session Thread: <code>{threadId || 'Initialized on first message'}</code>
+                  </div>
+                </div>
+
+                <div className="collaborator-architecture-card">
+                  <div className="card-label">Available Multi-Agent Collaborators:</div>
+                  <div className="collab-item">
+                    <span className="collab-dot hr"></span>
+                    <div>
+                      <strong>bb_hr_agent</strong>
+                      <p>Employee rosters, personnel directory (Salaries masked for Store Managers).</p>
+                    </div>
+                  </div>
+                  <div className="collab-item">
+                    <span className="collab-dot finance"></span>
+                    <div>
+                      <strong>bb_finance_agent</strong>
+                      <p>Company-wide sales aggregates & salary statistics (Finance Analysts only).</p>
+                    </div>
+                  </div>
+                  <div className="collab-item">
+                    <span className="collab-dot tool"></span>
+                    <div>
+                      <strong>Direct Snowflake Tools</strong>
+                      <p><code>bb_get_inventory</code>, <code>bb_restock_inventory</code> via RSA key-pair auth.</p>
+                    </div>
+                  </div>
+                </div>
+
+                <h5 className="subgraph-section-title">🔍 Tool & Routing Traces</h5>
+                {inspectAudit?.steps && inspectAudit.steps.length > 0 ? (
+                  <div className="steps-list">
+                    {inspectAudit.steps.map((st: any, idx: number) => (
+                      <div key={idx} className="step-card">
+                        <div className="step-top">
+                          <span className="step-badge">{st.node || 'tool_call'}</span>
+                          <span className="step-status">{st.status || 'executed'}</span>
+                        </div>
+                        {st.tool && (
+                          <div className="step-info-row">
+                            <span>Tool: <strong>{st.tool}</strong></span>
+                            {st.user && <span>User: <code>{st.user}</code></span>}
+                          </div>
+                        )}
+                        {st.auth && (
+                          <div className="step-auth-pill">
+                            🔐 Auth: {st.auth}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    <details className="raw-json-details">
+                      <summary>View Raw Trace JSON</summary>
+                      <pre className="audit-json">
+                        {JSON.stringify(inspectAudit.steps, null, 2)}
+                      </pre>
+                    </details>
+                  </div>
+                ) : (
+                  <p className="empty-sub">Send a message or click 'Inspect Agent Routing & Tool Audit' on any response to view live traces.</p>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'identity' && (
+              <div className="identity-tab-content">
+                <div className="inspector-card">
+                  <div className="card-label">Verified Context Variables:</div>
+                  <div className="context-vars-list">
+                    <div className="context-row">
+                      <span>bb_role</span>
+                      <strong>{user.role}</strong>
+                    </div>
+                    <div className="context-row">
+                      <span>bb_store_id</span>
+                      <strong>Store {user.store_id}</strong>
+                    </div>
+                    <div className="context-row">
+                      <span>bb_region</span>
+                      <strong>{user.region}</strong>
+                    </div>
+                    <div className="context-row">
+                      <span>bb_email</span>
+                      <strong>{user.email}</strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="inspector-card">
+                  <div className="card-label">Ephemeral Snowflake OAuth Token:</div>
+                  <div className="token-meta-row">
+                    <span>Snowflake User:</span>
+                    <code>{user.dynamic_token?.snowflake_user}</code>
+                  </div>
+                  <div className="token-meta-row">
+                    <span>Snowflake Role:</span>
+                    <code>{user.dynamic_token?.snowflake_role}</code>
+                  </div>
+                  <div className="token-meta-row">
+                    <span>Granted Scopes:</span>
+                    <span>{user.dynamic_token?.scopes?.join(', ')}</span>
+                  </div>
+                  <div className="token-meta-row">
+                    <span>TTL:</span>
+                    <span className="ttl-badge">300s (Auto-Revoked)</span>
+                  </div>
+                  <div className="token-code-box">
+                    <code>{user.dynamic_token?.token}</code>
+                  </div>
+                </div>
               </div>
             )}
 
             {activeTab === 'memory' && (
               <div className="memory-tab-content">
-                <div className="memory-tab-header">
-                  <div className="sqlite-badge">
-                    <span className="sqlite-dot"></span>
-                    <span>SQLite 3 (data/semantic_memory.db)</span>
-                  </div>
-                  <div className="memory-controls">
-                    <button className="small-action-btn" onClick={refreshMemories} title="Refresh Table">
-                      🔄 Refresh
-                    </button>
-                    {facts.length > 0 && (
-                      <button className="small-action-btn danger" onClick={handleClearMemory} title="Clear All Rows">
-                        🗑️ Clear
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {memoryActionMsg && <div className="action-feedback-pill">{memoryActionMsg}</div>}
-
-                <p className="drawer-desc">
-                  Structured EAV table with atomic <code>ON CONFLICT DO UPDATE</code> (User: <strong>{user.username}</strong>):
-                </p>
-
-                {facts.length === 0 ? (
-                  <div className="empty-memory-box">
-                    <p className="empty-note">No rows in SQLite database yet.</p>
-                    <p className="empty-sub">Say <em>"Remember that I prefer brewing light roasts with oat milk"</em> or test manual upsert below!</p>
-                  </div>
-                ) : (
-                  <div className="table-responsive">
-                    <table className="sqlite-eav-table">
-                      <thead>
-                        <tr>
-                          <th>Entity</th>
-                          <th>Attribute</th>
-                          <th>Value</th>
-                          <th>Conf.</th>
-                          <th></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {facts.map((f, i) => (
-                          <tr key={i}>
-                            <td><strong className="entity-cell">{f.entity}</strong></td>
-                            <td className="attr-cell">{f.attribute}</td>
-                            <td className="val-cell">{f.value}</td>
-                            <td className="conf-cell">{Math.round(f.confidence * 100)}%</td>
-                            <td>
-                              <button
-                                className="delete-row-btn"
-                                onClick={() => handleDeleteFact(f)}
-                                title="Delete row"
-                              >
-                                ✕
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-
-                {/* Live SQL Conflict / Upsert Tester */}
-                <div className="upsert-test-card">
-                  <h5>⚡ Test Atomic SQL Conflict Resolution</h5>
-                  <p className="card-subtext">
-                    Insert or update an attribute (e.g. entity: <code>milk</code> $\to$ value: <code>almond milk</code>). SQLite replaces the value in-place without duplicate rows:
+                <div className="inspector-card">
+                  <div className="card-label">Dynamic EAV Preference State:</div>
+                  <p className="card-desc">
+                    Contradiction-free atomic slot memory. When preferences change, slots are dynamically updated with zero duplicates.
                   </p>
-                  <form onSubmit={handleManualUpsert} className="upsert-inline-form">
-                    <input
-                      type="text"
-                      placeholder="Entity (e.g. milk)"
-                      value={newEntity}
-                      onChange={e => setNewEntity(e.target.value)}
-                      className="mini-input"
-                    />
-                    <input
-                      type="text"
-                      placeholder="Attr (e.g. type)"
-                      value={newAttr}
-                      onChange={e => setNewAttr(e.target.value)}
-                      className="mini-input"
-                    />
-                    <input
-                      type="text"
-                      placeholder="Value (e.g. oat milk)"
-                      value={newVal}
-                      onChange={e => setNewVal(e.target.value)}
-                      className="mini-input"
-                    />
-                    <button type="submit" className="mini-submit-btn">UPSERT</button>
-                  </form>
+
+                  {memories.length > 0 ? (
+                    <div className="memory-cards-list">
+                      {memories.map((m: any, idx: number) => (
+                        <div key={idx} className="memory-badge-card">
+                          <div className="memory-badge-top">
+                            <span className="memory-cat-pill">{m.category}</span>
+                            <span className="memory-time">{m.updated_at ? m.updated_at.split(' ')[1] : 'active'}</span>
+                          </div>
+                          <div className="memory-fact-text">
+                            <strong>{m.entity}</strong> <span>({m.attribute})</span>: <span className="memory-val">{m.value}</span>
+                          </div>
+                          <button
+                            className="del-memory-btn"
+                            onClick={() => handleDeleteMemory(m.entity)}
+                            title="Delete preference"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="empty-sub">No preferences stored yet. Try saying "I prefer oat milk" or "Format in tables".</p>
+                  )}
+
+                  {memories.length > 0 && (
+                    <button className="clear-memory-btn" onClick={handleClearMemory}>
+                      🗑️ Clear All Learned Preferences
+                    </button>
+                  )}
                 </div>
 
-                {/* SQL Schema Transparency Box */}
-                <details className="sql-schema-details">
-                  <summary>View SQL Table Schema & Query</summary>
-                  <pre className="schema-sql">
-{`CREATE TABLE semantic_memory (
-  user_id TEXT NOT NULL,
-  category TEXT NOT NULL,
-  entity TEXT NOT NULL,
-  attribute TEXT NOT NULL,
-  value TEXT NOT NULL,
-  confidence REAL DEFAULT 1.0,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (user_id, category, entity, attribute)
-);
-
--- Atomic Conflict Target (No Duplicates)
-INSERT INTO semantic_memory (user_id, category, entity, attribute, value)
-VALUES ('${user.username}', 'preference', 'milk', 'type', 'almond milk')
-ON CONFLICT (user_id, category, entity, attribute)
-DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP;`}
-                  </pre>
-                </details>
-              </div>
-            )}
-
-            {activeTab === 'token' && (
-              <div>
-                <p className="drawer-desc">Ephemeral Snowflake OAuth Token issued by Broker:</p>
-                <div className="token-card">
-                  <div><strong>Token:</strong> <code>{user.dynamic_token?.token}</code></div>
-                  <div><strong>Snowflake User:</strong> {user.dynamic_token?.snowflake_user}</div>
-                  <div><strong>Snowflake Role:</strong> {user.dynamic_token?.snowflake_role}</div>
-                  <div><strong>Scopes:</strong> {user.dynamic_token?.scopes?.join(', ')}</div>
-                  <div><strong>Expires In:</strong> 300s (Auto-revoked)</div>
+                <div className="teach-preference-box">
+                  <div className="card-label">Test Dynamic Memory Invalidation:</div>
+                  <p className="card-sub">Click a prompt to see atomic slot updates supersede old values in real time:</p>
+                  <div className="quick-pref-chips">
+                    <button className="pref-chip" onClick={() => sendQuery("I switched to almond milk, please use that.")}>
+                      🔄 Switch to Almond Milk
+                    </button>
+                    <button className="pref-chip" onClick={() => sendQuery("I prefer oat milk in my drinks.")}>
+                      🥛 Prefer Oat Milk
+                    </button>
+                    <button className="pref-chip" onClick={() => sendQuery("Always format my responses in markdown tables.")}>
+                      📊 Format: Markdown Tables
+                    </button>
+                    <button className="pref-chip" onClick={() => sendQuery("Default lookback window to 14 days.")}>
+                      📅 Lookback: 14 Days
+                    </button>
+                  </div>
                 </div>
               </div>
             )}

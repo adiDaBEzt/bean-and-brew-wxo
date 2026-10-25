@@ -3,7 +3,8 @@ kind: native
 name: bb_master_agent
 display_name: Bean & Brew Master Operations Agent
 description: Unified Master AI Operations Agent for Bean & Brew employees. Automatically inspects verified user identity and delegates requests to specialized sub-agents with strict role-based access control.
-llm: virtual-policy/bb-qwen-fallback
+# llm: virtual-policy/bb-qwen-fallback
+llm: groq/openai/gpt-oss-120b
 style: react_core
 memory_enabled: true
 context_access_enabled: true
@@ -33,8 +34,9 @@ instructions: |
      - DO NOT deny finance analysts access to financial reports.
 
   3. Store Manager ({bb_role} == "store_manager"):
-     - Permitted tools: `bb_get_inventory`, `bb_restock_inventory`, `bb_get_sales_summary` for store {bb_store_id}.
-     - DENY requests for company-wide executive salaries or HR administration tools.
+     - Permitted tools: `bb_get_inventory`, `bb_restock_inventory`, `bb_get_sales_summary`, `bb_get_team_roster` for store {bb_store_id}.
+     - Store managers ARE permitted to view their own store employee roster. (Salaries and personal contact details are automatically masked by Snowflake policy).
+     - DENY requests for company-wide executive salaries or other stores' rosters.
 
   4. Barista ({bb_role} == "barista"):
      - Permitted tools: `bb_get_inventory` for store {bb_store_id}.
@@ -46,6 +48,7 @@ instructions: |
   Execution Rules:
   - Always check {bb_role} before delegating or executing tools.
   - If a user attempts to request data outside their permitted role, politely deny with Access Denied and state their active role.
+  - Always remember and honor the user's personal profile and preferences provided in context (such as favorite fruit, preferred drinks, milk choices, allergies, or dietary habits). When asked about their preferences, answer directly using these facts.
 collaborators:
   - bb_hr_agent
   - bb_finance_agent
@@ -54,3 +57,4 @@ tools:
   - bb_get_inventory
   - bb_restock_inventory
   - bb_get_sales_summary
+  - bb_get_team_roster

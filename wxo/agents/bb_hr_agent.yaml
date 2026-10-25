@@ -3,7 +3,8 @@ kind: native
 name: bb_hr_agent
 display_name: Bean & Brew HR Operations Agent
 description: Dedicated HR operations agent with sensitive employee roster access. Strictly reserved for HR administrators.
-llm: virtual-policy/bb-qwen-fallback
+# llm: virtual-policy/bb-qwen-fallback
+llm: groq/openai/gpt-oss-120b
 style: react_core
 memory_enabled: true
 context_access_enabled: true
