@@ -54,8 +54,8 @@ DEMO_USER_PASSWORD = os.getenv("DEMO_USER_PASSWORD", "")
 WXO_URL = os.getenv("WXO_URL", "")
 WXO_API_KEY = os.getenv("WXO_API_KEY", "")
 
-MASTER_AGENT_ID = "c26a5051-2017-4987-ab41-fb26c8f4c439"
-MASTER_AGENT_NAME = "bb_master_agent"
+MASTER_AGENT_ID = os.getenv("WXO_MASTER_AGENT_ID", "05fa901e-df2a-469a-955e-c88c010ef832")
+MASTER_AGENT_NAME = os.getenv("WXO_MASTER_AGENT_NAME", "bb_master_agent")
 
 JWT_SECRET = os.getenv("BFF_JWT_SECRET", "bb-dev-secret-key-38291048123912093")
 JWT_ALGORITHM = "HS256"
