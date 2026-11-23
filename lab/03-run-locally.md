@@ -14,32 +14,20 @@ The generator fills any blank `KEYCLOAK_CLIENT_SECRET`, `DEMO_USER_PASSWORD`, an
 
 ## 2. Run standalone Keycloak in Terminal 1
 
-Extract the approved Keycloak 26.8.2 archive anywhere you can write. Set `KEYCLOAK_DIR` to that directory. Select Java 25 with `JAVA_HOME`. On macOS, `/usr/libexec/java_home -v 25` prints its install path. On Linux, set the variable to your approved Java 25 installation.
+1. Extract the approved Keycloak 26.8.2 archive in Finder or your file manager.
+2. Open the extracted folder and create a `data/import` folder path if it is missing. From the lab repo, copy `infra/keycloak/realm-bean-brew.json` into that folder and rename the copy to `bean-brew-realm.json`. Keep the copy in your private local Keycloak folder.
+3. Open a terminal. Set `KEYCLOAK_DIR` to your extracted folder. The command below selects Java 25 on macOS. On Linux, set `JAVA_HOME` to the path of your approved Java 25 installation.
 
-```bash
-export KEYCLOAK_DIR="/absolute/path/to/keycloak-26.8.2"
-# macOS only. On Linux, set JAVA_HOME to the Java 25 directory.
-export JAVA_HOME="$(/usr/libexec/java_home -v 25)"
-"$JAVA_HOME/bin/java" -version
+   ```bash
+   export KEYCLOAK_DIR="/absolute/path/to/keycloak-26.8.2"
+   export JAVA_HOME="$(/usr/libexec/java_home -v 25)"
+   "$KEYCLOAK_DIR/bin/kc.sh" start-dev --import-realm \
+     --http-host=127.0.0.1 --http-port=8080
+   ```
 
-mkdir -p "$KEYCLOAK_DIR/data/import"
-install -m 600 infra/keycloak/realm-bean-brew.json \
-  "$KEYCLOAK_DIR/data/import/bean-brew-realm.json"
+Keep this terminal open. Keycloak should log `Realm 'bean-brew' imported` on the first start. Reuse the same `.env` and Keycloak installation for later runs. Startup import skips an existing realm. If its credentials differ, use a fresh standalone extraction dedicated to the lab, or have the lab owner update that realm. [Keycloak realm import](https://www.keycloak.org/server/importExport)
 
-"$KEYCLOAK_DIR/bin/kc.sh" start-dev --import-realm \
-  --http-host=127.0.0.1 --http-port=8080
-```
-
-Keep this terminal open. Keycloak should log `Realm 'bean-brew' imported` on the first start. Use the same Keycloak installation and `.env` on later runs. Startup import skips an existing realm. If its credentials differ, use a fresh standalone extraction dedicated to the lab, or have the lab owner update that realm deliberately. [Keycloak realm import](https://www.keycloak.org/server/importExport)
-
-**Checkpoint**
-
-```bash
-curl -fsS http://127.0.0.1:8080/realms/bean-brew/.well-known/openid-configuration \
-  | venv/bin/python -c 'import json, sys; print(json.load(sys.stdin)["issuer"])'
-```
-
-Expected issuer: `http://127.0.0.1:8080/realms/bean-brew`.
+**Checkpoint** · Open the realm discovery page in your browser. You should see JSON with the issuer `http://127.0.0.1:8080/realms/bean-brew`. [Open Keycloak discovery](http://127.0.0.1:8080/realms/bean-brew/.well-known/openid-configuration)
 
 ## 3. Run FastAPI in Terminal 2
 
@@ -47,7 +35,7 @@ Expected issuer: `http://127.0.0.1:8080/realms/bean-brew`.
 venv/bin/uvicorn bff.main:app --host 127.0.0.1 --port 8000
 ```
 
-From another terminal, run `curl -fsS http://127.0.0.1:8000/health`. The JSON should include `"status":"ok"`.
+Open the health page in your browser. The JSON should include `"status":"ok"`. [Open backend health](http://127.0.0.1:8000/health)
 
 ## 4. Run Vite in Terminal 3
 

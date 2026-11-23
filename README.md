@@ -6,11 +6,13 @@ Build and test a coffee-chain operations assistant with IBM watsonx Orchestrate,
 
 **Machine** · Mac or Linux. The lab runs Keycloak directly on Java and uses loopback ports 8080, 8000, and 5173. The standalone path needs no container runtime or hypervisor.
 
+Use the browser and your editor for configuration and checks. The terminal handles dependency installs, data seeding, bulk imports, and local servers.
+
 ## Prerequisites
 
 | What you need | What it does |
 | --- | --- |
-| Git, Python 3.12, and Node.js 22.12 or newer | Clone the repo and run the FastAPI and Vite apps. |
+| Python 3.12 and Node.js 22.12 or newer | Run the FastAPI and Vite apps. |
 | Java 25 and an approved standalone Keycloak 26.8.2 distribution | Run the local identity provider. Use the zip or tar archive from the [Keycloak downloads page](https://www.keycloak.org/downloads). |
 | A dedicated Snowflake Enterprise Edition trial or lab account | Create the synthetic dataset, service users, row access policy, and masking policies. You need an administrator who can use `ACCOUNTADMIN`. |
 | An IBM Cloud watsonx Orchestrate instance and IAM API key | Create connections and import tools. You need rights to import and deploy agents in the intended workspace. |
@@ -19,15 +21,16 @@ Use a dedicated lab account and synthetic data. Keep the local services on loopb
 
 ## 1. Clone the lab and install dependencies
 
-```bash
-git clone --branch codex/bean-and-brew-lab https://github.com/adiDaBEzt/bean-and-brew-wxo.git
-cd bean-and-brew-wxo
-python3.12 -m venv venv
-venv/bin/python -m pip install -r bff/requirements.txt 'ibm-watsonx-orchestrate==2.10.0'
-npm ci --prefix frontend
-cp -n .env.example .env
-chmod 600 .env
-```
+1. Open this repository on GitHub. In the branch selector, choose **`bean-and-brew-lab`**. Select **Code → Download ZIP**, extract it, then open the extracted folder in your editor. If you use a Git desktop client, you can check out the lab branch there.
+2. In your editor, open `.env.example` and use **Save As** to save a copy named `.env` in the repo root. Keep the leading dot. If the template is hidden, open the folder in your editor or show hidden files in Finder with **⌘⇧.**
+3. Open a terminal in the extracted folder and run the unattended dependency installs together.
+
+   ```bash
+   chmod 600 .env
+   python3.12 -m venv venv
+   venv/bin/python -m pip install -r bff/requirements.txt 'ibm-watsonx-orchestrate==2.10.0'
+   npm ci --prefix frontend
+   ```
 
 Install the Python requirements and ADK together so pip can resolve Snowflake and IBM SDK dependencies in one pass. This includes `snowflake-connector-python`, `langgraph`, and the SQLite checkpointer.
 
@@ -47,7 +50,7 @@ Follow [01 · Set up Snowflake](lab/01-snowflake.md) to find the account identif
 
 ## 3. Deploy the agents
 
-Follow [02 · Deploy in watsonx Orchestrate](lab/02-orchestrate.md) to find the service URL and IAM key, configure Draft and Live Snowflake connections, and import the HR, finance, and master agents. The YAML uses `style: react` for ADK 2.10.0 and defaults to Claude Sonnet 4.6 when the tenant offers it. Save the master agent ID in `.env`.
+Follow [02 · Deploy in watsonx Orchestrate](lab/02-orchestrate.md) to find the service URL and IAM key, configure Draft and Live connections in the browser, and deploy the three agents from Agent Builder. Use the ADK for the bulk import of the tool and agent files. The YAML uses `style: react` for ADK 2.10.0 and defaults to Claude Sonnet 4.6 when the tenant offers it. Save the master agent ID in `.env`.
 
 **Checkpoint** · The master is Live with its collaborators, and `WXO_MASTER_AGENT_ID` points at your tenant’s `bb_master_agent`.
 

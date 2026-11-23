@@ -4,18 +4,13 @@ Create a dedicated Snowflake **Enterprise Edition** trial or use an isolated, ap
 
 ## Find your account identifier
 
-Sign in to Snowsight, open a SQL worksheet, and run this query while signed in with your lab administrator login.
-
-```sql
-SELECT CURRENT_ORGANIZATION_NAME() || '-' || CURRENT_ACCOUNT_NAME() AS ACCOUNT_IDENTIFIER,
-       CURRENT_USER() AS ADMIN_USER;
-```
-
-In the repo root, set `SNOWFLAKE_ACCOUNT` and `SNOWFLAKE_ADMIN_USER` in your local `.env` to the two result values. The Python connector uses the `organization-account` form, with no URL scheme or host suffix. The user must be able to activate `ACCOUNTADMIN`. [Snowflake account identifiers](https://docs.snowflake.com/en/user-guide/admin-account-identifier)
+1. Sign in to Snowsight with your lab administrator account. Open the account selector and choose **View account details**.
+2. Copy the client account identifier in `organization-account` form into `SNOWFLAKE_ACCOUNT` in `.env`. Put your Snowflake username in `SNOWFLAKE_ADMIN_USER`. The username must be able to use `ACCOUNTADMIN`. [Where to find your account identifier](https://docs.snowflake.com/en/user-guide/admin-account-identifier)
+3. In Snowsight, open the role selector and confirm you can select **ACCOUNTADMIN** before continuing. If you aren’t sure of the username, run `SELECT CURRENT_USER();` in a Snowsight SQL worksheet.
 
 ## Run the bootstrap
 
-From the repo root, run:
+Run the bootstrap from the repo root. It seeds thousands of rows, applies the policies, and creates all five keys and users in one batch. The only prompts are for Snowflake sign-in.
 
 ```bash
 venv/bin/python snowflake/bootstrap.py
@@ -29,7 +24,7 @@ Keep the five private keys under the Git-ignored `snowflake/keys/` directory. Th
 
 ## Checkpoint
 
-The bootstrap should report that it created five service users. In Snowsight, check the seeded data and policy objects:
+The bootstrap should report five service users. In Snowsight, open **Catalog → Database Explorer**, find **BEAN_BREW → CORE**, and look for **STORES**, **INVENTORY**, and **EMPLOYEES**. For the exact seed counts and policy names, paste the following into a Snowsight SQL worksheet and run it there:
 
 ```sql
 USE ROLE ACCOUNTADMIN;
