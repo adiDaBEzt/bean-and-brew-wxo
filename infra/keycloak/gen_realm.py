@@ -5,25 +5,31 @@ the generated realm-bean-brew.json is git-ignored. Run: venv/bin/python infra/ke
 """
 import json
 import pathlib
-import re
 import secrets
+
+from dotenv import dotenv_values, set_key
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 ENV_FILE = ROOT / ".env"
 
 
-def env_get_or_create(key, value_fn):
-    text = ENV_FILE.read_text()
-    m = re.search(rf"^{key}=(.*)$", text, flags=re.M)
-    if m and m.group(1):
-        return m.group(1)
-    v = value_fn()
-    ENV_FILE.write_text(text.rstrip("\n") + f"\n{key}={v}\n")
-    return v
+if not ENV_FILE.is_file():
+    raise SystemExit("Copy .env.example to .env before generating the demo realm.")
 
 
+def env_get_or_create(key, generate):
+    value = dotenv_values(ENV_FILE).get(key)
+    if not value:
+        value = generate()
+        set_key(str(ENV_FILE), key, value, quote_mode="never")
+    return value
+
+
+ENV_FILE.chmod(0o600)
 CLIENT_SECRET = env_get_or_create("KEYCLOAK_CLIENT_SECRET", lambda: secrets.token_urlsafe(24))
-USER_PASSWORD = env_get_or_create("DEMO_USER_PASSWORD", lambda: "Brew-" + secrets.token_urlsafe(9))
+USER_PASSWORD = env_get_or_create("DEMO_USER_PASSWORD", lambda: "Brew-" + secrets.token_urlsafe(12))
+env_get_or_create("BFF_JWT_SECRET", lambda: secrets.token_hex(32))
+ENV_FILE.chmod(0o600)
 
 ROLES = ["barista", "store_manager", "regional_manager", "finance_analyst", "hr_admin"]
 USERS = [
@@ -58,7 +64,7 @@ realm = {
         "publicClient": False,
         "secret": CLIENT_SECRET,
         "standardFlowEnabled": True,
-        "directAccessGrantsEnabled": False,
+        "directAccessGrantsEnabled": True,
         "redirectUris": ["http://localhost:8000/auth/callback", "http://localhost:5173/*"],
         "webOrigins": ["http://localhost:5173", "http://localhost:8000"],
         "attributes": {"pkce.code.challenge.method": "S256", "post.logout.redirect.uris": "http://localhost:5173/*"},
@@ -83,5 +89,7 @@ realm = {
 }
 
 out = pathlib.Path(__file__).resolve().parent / "realm-bean-brew.json"
-out.write_text(json.dumps(realm, indent=2))
+out.touch(mode=0o600, exist_ok=True)
+out.chmod(0o600)
+out.write_text(json.dumps(realm, indent=2) + "\n")
 print(f"wrote {out} ({len(USERS)} users, {len(ROLES)} roles)")

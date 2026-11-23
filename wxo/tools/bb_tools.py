@@ -1,13 +1,10 @@
 """Bean & Brew Snowflake tools for watsonx Orchestrate.
 
-Security model (defence in depth, see docs/identity-flow.md):
-  1. `bb_role`, `bb_store_id`, `bb_region` are WXO *context variables*. They come from the signed
-     embed JWT / Runs API `context`, are filled in by the runtime, and the LLM cannot change them.
-  2. Every tool checks the caller's role against its own allow-list (tool-level RBAC).
-  3. The tool then connects to Snowflake as the *least-privileged Snowflake role* for that caller,
-     using a per-role WXO connection. A tool is only bound to the connections of roles that are
-     allowed to use it, so e.g. the sales tool can never obtain HR credentials.
-  4. Snowflake row access / masking policies are the final enforcement layer.
+Lab access model:
+  1. The app passes the signed-in persona's role and scope to the Orchestrate run.
+     The agent supplies these as tool arguments.
+  2. Each tool checks its role allow-list and selects the matching Snowflake connection.
+  3. Snowflake applies role grants, row access, and masking using that connection and scope.
 """
 from contextlib import contextmanager
 import os
@@ -142,10 +139,10 @@ def _rows(cur, sql, params=None):
 def bb_whoami(bb_role: str = "", bb_store_id: str = "", bb_region: str = "", bb_email: str = "") -> dict:
     """
     Args:
-        bb_role: Verified role of the user (filled automatically from context).
-        bb_store_id: Verified store of the user (filled automatically from context).
-        bb_region: Verified region of the user (filled automatically from context).
-        bb_email: Verified email of the user (filled automatically from context).
+        bb_role: Role from the signed-in persona context.
+        bb_store_id: Store from the signed-in persona context.
+        bb_region: Region from the signed-in persona context.
+        bb_email: Email from the signed-in persona context.
     """
     perms = {
         "barista": ["bb_get_inventory (own store, read-only)"],

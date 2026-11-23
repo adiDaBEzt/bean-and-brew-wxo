@@ -66,16 +66,23 @@ const ROLE_SUGGESTIONS: Record<string, string[]> = {
   ],
 }
 
+const CHAT_REQUEST_TIMEOUT_MS = 120_000
+
 export default function App() {
   const [user, setUser] = useState<UserProfile | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [loginError, setLoginError] = useState('')
   const [threadId, setThreadId] = useState<string | null>(null)
   const [inspectAudit, setInspectAudit] = useState<any | null>(null)
+  const [inspectorOpen, setInspectorOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<'audit' | 'identity' | 'memory'>('audit')
   const [memories, setMemories] = useState<any[]>([])
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const inspectorHeadingRef = useRef<HTMLHeadingElement>(null)
+  const traceHeadingRef = useRef<HTMLHeadingElement>(null)
+  const inspectorTriggerRef = useRef<HTMLButtonElement>(null)
 
   const refreshMemories = async () => {
     try {
@@ -131,6 +138,7 @@ export default function App() {
   }, [messages, loading])
 
   const handleLogin = async (username: string) => {
+    setLoginError('')
     setLoading(true)
     try {
       const res = await fetch('/api/auth/login', {
@@ -147,12 +155,17 @@ export default function App() {
           {
             id: 'welcome',
             role: 'assistant',
-            content: `☕ **Welcome ${u.username}!**\n\nAuthenticated via **Keycloak SSO** as **${u.role}** (Store **${u.store_id}**, Region **${u.region}**).\n\nYou are connected to the **Bean & Brew Master Operations Agent** with Zero Trust Multi-Agent Collaborators (\`bb_hr_agent\`, \`bb_finance_agent\`) and native session memory.\n\n*Ephemeral Snowflake OAuth Token: \`${u.dynamic_token?.token?.slice(0, 16)}...\` (Valid for 300s).*`,
+            content: `☕ **Welcome ${u.username}!**\n\nSigned in through **Keycloak** as **${u.role}** (Store **${u.store_id}**, Region **${u.region}**).\n\nYou are connected to the **Bean & Brew Master Operations Agent** with Zero Trust Multi-Agent Collaborators (\`bb_hr_agent\`, \`bb_finance_agent\`) and native session memory.\n\n*Demo session marker: \`${u.dynamic_token?.token?.slice(0, 16)}...\` (Valid for 300s).*`,
             timestamp: new Date().toLocaleTimeString()
           }
         ])
         setThreadId(null)
+      } else {
+        const error = await res.json().catch(() => null)
+        setLoginError(error?.detail || 'Sign-in failed. Check that Keycloak and the backend are running.')
       }
+    } catch {
+      setLoginError('Could not reach the backend. Check that it is running on port 8000.')
     } finally {
       setLoading(false)
     }
@@ -164,7 +177,23 @@ export default function App() {
     setMessages([])
     setThreadId(null)
     setInspectAudit(null)
+    setInspectorOpen(false)
     setMemories([])
+  }
+
+  const openInspector = (trigger: HTMLButtonElement, showTrace = false) => {
+    inspectorTriggerRef.current = trigger
+    setInspectorOpen(true)
+    requestAnimationFrame(() => {
+      const heading = showTrace ? traceHeadingRef.current : inspectorHeadingRef.current
+      heading?.focus({ preventScroll: true })
+      if (showTrace) heading?.scrollIntoView({ block: 'start' })
+    })
+  }
+
+  const closeInspector = () => {
+    setInspectorOpen(false)
+    inspectorTriggerRef.current?.focus({ preventScroll: true })
   }
 
   const sendQuery = async (queryText: string) => {
@@ -185,7 +214,8 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: queryText, thread_id: threadId }),
-        credentials: 'include'
+        credentials: 'include',
+        signal: AbortSignal.timeout(CHAT_REQUEST_TIMEOUT_MS)
       })
       if (res.ok) {
         const data = await res.json()
@@ -193,7 +223,7 @@ export default function App() {
         const botMsg: Message = {
           id: (Date.now() + 1).toString(),
           role: 'assistant',
-          content: data.reply,
+          content: data.reply?.trim() ? data.reply : 'The agent finished without a reply. Try sending your message again.',
           steps: data.steps,
           agent_used: data.agent_used,
           timestamp: new Date().toLocaleTimeString()
@@ -220,13 +250,17 @@ export default function App() {
           }
         ])
       }
-    } catch (e: any) {
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Unknown error'
+      const message = error instanceof DOMException && error.name === 'TimeoutError'
+        ? 'The agent is taking longer than expected. Try sending your message again.'
+        : `⚠️ Network error: ${detail}`
       setMessages(prev => [
         ...prev,
         {
           id: (Date.now() + 1).toString(),
           role: 'assistant',
-          content: `⚠️ Network error: ${e.message}`,
+          content: message,
           timestamp: new Date().toLocaleTimeString()
         }
       ])
@@ -281,6 +315,7 @@ export default function App() {
               </div>
             </div>
 
+            {loginError && <p className="login-status-pill" role="alert">{loginError}</p>}
             {loading && (
               <div className="login-status-pill">
                 <span className="status-spinner"></span>
@@ -349,7 +384,8 @@ export default function App() {
                   <div className="bubble-footer">
                     <button
                       className="audit-btn"
-                      onClick={() => {
+                      aria-controls="agent-inspector"
+                      onClick={(event) => {
                         setInspectAudit({
                           steps: m.steps,
                           agent_used: m.agent_used,
@@ -357,6 +393,7 @@ export default function App() {
                           token: user.dynamic_token
                         })
                         setActiveTab('audit')
+                        openInspector(event.currentTarget, true)
                       }}
                     >
                       🔍 Inspect Agent Routing & Tool Audit
@@ -367,7 +404,7 @@ export default function App() {
             ))}
 
             {loading && (
-              <div className="message-bubble assistant loading-indicator">
+              <div className="message-bubble assistant loading-indicator" role="status">
                 <span className="dots">☕ Master Agent reasoning & evaluating Zero Trust policies...</span>
               </div>
             )}
@@ -377,6 +414,14 @@ export default function App() {
           {/* Quick Suggestions Strip */}
           <div className="suggestions-strip">
             <span className="suggestions-label">Quick Actions:</span>
+            <button
+              className="audit-btn inspector-toggle"
+              aria-controls="agent-inspector"
+              aria-expanded={inspectorOpen}
+              onClick={(event) => openInspector(event.currentTarget)}
+            >
+              Inspector
+            </button>
             {suggestions.map((s, idx) => (
               <button
                 key={idx}
@@ -403,9 +448,14 @@ export default function App() {
         </div>
 
         {/* Minimal Clean Inspector Drawer */}
-        <aside className="audit-drawer">
+        <aside
+          id="agent-inspector"
+          className={inspectorOpen ? 'audit-drawer is-open' : 'audit-drawer'}
+          aria-labelledby="agent-inspector-title"
+        >
           <div className="drawer-header">
-            <h4>Agent & Security Inspector</h4>
+            <h4 id="agent-inspector-title" ref={inspectorHeadingRef} tabIndex={-1}>Agent & Security Inspector</h4>
+            <button className="audit-btn inspector-close" onClick={closeInspector}>Close</button>
           </div>
 
           <div className="tab-buttons">
@@ -467,7 +517,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <h5 className="subgraph-section-title">🔍 Tool & Routing Traces</h5>
+                <h5 className="subgraph-section-title" ref={traceHeadingRef} tabIndex={-1}>🔍 Tool & Routing Traces</h5>
                 {inspectAudit?.steps && inspectAudit.steps.length > 0 ? (
                   <div className="steps-list">
                     {inspectAudit.steps.map((st: any, idx: number) => (
@@ -527,7 +577,7 @@ export default function App() {
                 </div>
 
                 <div className="inspector-card">
-                  <div className="card-label">Ephemeral Snowflake OAuth Token:</div>
+                  <div className="card-label">Demo session marker:</div>
                   <div className="token-meta-row">
                     <span>Snowflake User:</span>
                     <code>{user.dynamic_token?.snowflake_user}</code>
@@ -542,7 +592,7 @@ export default function App() {
                   </div>
                   <div className="token-meta-row">
                     <span>TTL:</span>
-                    <span className="ttl-badge">300s (Auto-Revoked)</span>
+                    <span className="ttl-badge">300s</span>
                   </div>
                   <div className="token-code-box">
                     <code>{user.dynamic_token?.token}</code>
