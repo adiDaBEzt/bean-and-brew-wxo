@@ -8,6 +8,8 @@ Create a dedicated Snowflake **Enterprise Edition** trial or use an isolated, ap
 2. Copy the client account identifier in `organization-account` form into `SNOWFLAKE_ACCOUNT` in `.env`. Put your Snowflake username in `SNOWFLAKE_ADMIN_USER`. The username must be able to use `ACCOUNTADMIN`. [Where to find your account identifier](https://docs.snowflake.com/en/user-guide/admin-account-identifier)
 3. In Snowsight, open the role selector and confirm you can select **ACCOUNTADMIN** before continuing. If you aren’t sure of the username, run `SELECT CURRENT_USER();` in a Snowsight SQL worksheet.
 
+![The Snowsight Account Details dialog showing the account identifier, login name, role ACCOUNTADMIN and Enterprise edition. The identifier and login name are blurred.](images/snowsight-account-details.png)
+
 ## Run the bootstrap
 
 Run the bootstrap from the repo root. It seeds thousands of rows, applies the policies, and creates all five keys and users in one batch. The only prompts are for Snowflake sign-in.
@@ -26,6 +28,8 @@ Keep the five private keys under the Git-ignored `snowflake/keys/` directory. Th
 
 The bootstrap should report five service users. In Snowsight, open **Catalog → Database Explorer**, find **BEAN_BREW → CORE**, and look for **STORES**, **INVENTORY**, and **EMPLOYEES**. For the exact seed counts and policy names, paste the following into a Snowsight SQL worksheet and run it there:
 
+![The BEAN_BREW.CORE schema in Snowsight Catalog Explorer, listing the EMPLOYEES, INVENTORY, SALES and STORES tables and the SALARY_SUMMARY and SALES_DAILY views.](images/snowsight-catalog.png)
+
 ```sql
 USE ROLE ACCOUNTADMIN;
 USE WAREHOUSE BB_WH;
@@ -41,6 +45,12 @@ SHOW MASKING POLICIES IN SCHEMA BEAN_BREW.CORE;
 ```
 
 The sample includes 12 stores and six low-stock items at S01. Look for `RAP_SCOPE`, `MASK_SALARY`, `MASK_EMAIL`, and `MASK_PHONE`. These administrator queries confirm the seed and policies are present. The later exercises check access as the actual demo roles.
+
+![A Snowsight worksheet showing the six low-stock items at store S01, including Paper Cups 12oz with 20 on hand and a reorder level of 60.](images/snowsight-low-inventory.png)
+
+![SHOW MASKING POLICIES results listing MASK_EMAIL, MASK_PHONE and MASK_SALARY in BEAN_BREW.CORE.](images/snowsight-masking-policies.png)
+
+![SHOW ROW ACCESS POLICIES results listing RAP_SCOPE in BEAN_BREW.CORE.](images/snowsight-row-access-policy.png)
 
 ## Recover an interrupted setup
 

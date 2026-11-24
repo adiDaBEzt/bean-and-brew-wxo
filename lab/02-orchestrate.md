@@ -8,6 +8,8 @@
 2. Copy **Service instance URL** into `WXO_URL` in your local `.env` file. Include the `/instances/…` part.
 3. Select **Generate API key**. Save the IAM key in `WXO_API_KEY` in `.env`. You’ll also enter it privately when the ADK asks you to sign in. [IBM Cloud ADK setup](https://ibm.github.io/EEL-agentic-ai-bootcamp/labs/environment-setup-lab/wxo-client-setup/)
 
+![The Settings page in watsonx Orchestrate, API details tab, with the Generate API key button and the Service instance URL. The URL is blurred.](images/wxo-api-details.png)
+
 ## 2. Set up the five Snowflake connections
 
 Complete [01 · Set up Snowflake](01-snowflake.md) first. Each connection uses the account identifier in `SNOWFLAKE_ACCOUNT` and a dedicated service identity.
@@ -31,6 +33,8 @@ Complete [01 · Set up Snowflake](01-snowflake.md) first. Each connection uses t
    | `private_key` | The entire matching `.p8` file, preserving its line breaks and PEM header and footer. |
 
 4. Save the credentials. Repeat the configuration and credentials for **Live**, then repeat for the other roles. The **Custom** list should show all five connections configured with credentials in both environments. Use the shortcut below if your credential editor cannot preserve PEM line breaks. [IBM connection management](https://www.ibm.com/docs/en/watsonx/watson-orchestrate/base?topic=credentials-creating-managing-connections) · [Draft and Live connections](https://www.ibm.com/docs/en/watsonx/watson-orchestrate/base?topic=credentials-connections-across-environments-deployments)
+
+![The Custom connections list in Orchestrate showing bb_sf_hr, bb_sf_finance, bb_sf_regional, bb_sf_manager and bb_sf_barista, each configured with Key Value Pair team credentials in Draft and Live.](images/wxo-connections.png)
 
 ## 3. Sign in to the ADK once and batch-import the files
 
@@ -68,16 +72,28 @@ venv/bin/orchestrate agents import --safe --file wxo/agents/bb_master_agent.yaml
 
 **Checkpoint** · In Orchestrate, open **Build → All tools** and verify that `bb_get_inventory`, `bb_get_team_roster`, and `bb_get_salary_summary` are listed. Open **All agents** and look for **Bean & Brew HR Operations Agent**, **Bean & Brew Finance & Analytics Agent**, and **Bean & Brew Master Operations Agent**. Select the workspace used by the imports if your tenant has more than one.
 
+![The All tools list filtered to bb_, showing bb_whoami, bb_restock_inventory, bb_get_team_roster, bb_get_sales_summary, bb_get_salary_summary and bb_get_inventory.](images/wxo-all-tools.png)
+
+![The All agents list filtered to Bean, showing the Master Operations, Finance & Analytics and HR Operations agents, all Live.](images/wxo-all-agents.png)
+
 ## 4. Review the model and deploy in Agent Builder
 
 1. Open the **Bean & Brew HR Operations Agent** from **Build → All agents**. Check the **AI model** setting. The supplied YAML selects **Claude Sonnet 4.6 on Amazon Bedrock** (`bedrock/us.anthropic.claude-sonnet-4-6`). If your tenant marks it unavailable, choose a permitted model with tool calling and save. Repeat the model check for each agent. [IBM model selection](https://www.ibm.com/docs/en/watsonx/watson-orchestrate/base?topic=agents-choosing-ai-model-agent)
+
+![The Bean & Brew Master Operations Agent in Agent Builder with the AI model set to Claude Sonnet 4.6 on AWS Bedrock.](images/wxo-master-agent-model.png)
 2. Select **Deploy**, review the **Pre-deployment Summary**, and confirm the deployment. Resolve any missing **Live** credentials in the connection’s configuration before retrying.
 3. Deploy **Bean & Brew Finance & Analytics Agent** next. Then open **Bean & Brew Master Operations Agent**, verify both collaborators are listed in its configuration, and deploy it last. Each agent should show as **Live**. [IBM deployment steps](https://www.ibm.com/docs/en/watsonx/watson-orchestrate/base?topic=deploying-agents-live-environment)
+
+![The Agents tab of the Master agent, listing the Finance & Analytics and HR collaborator agents.](images/wxo-master-collaborators.png)
+
+![The Live Deployment Overview of the Master agent, showing version v2 with status Live.](images/wxo-master-live.png)
 
 ## 5. Copy the master agent ID in the UI
 
 1. On **Bean & Brew Master Operations Agent**, go to **Channels → Embedded agent** and select **Live**.
 2. Copy the generated snippet into a local scratch editor. In `chatOptions`, copy the UUID next to `agentId` into `WXO_MASTER_AGENT_ID` in `.env`. The app uses only this UUID from the snippet. [Where the UI shows the agent ID](https://www.ibm.com/docs/en/watsonx/watson-orchestrate/base?topic=applications-embedding-agent-web)
+
+![The Embedded agent channel on the Live tab, with the embed snippet containing orchestrationID, hostURL, crn, agentId and agentEnvironmentId. The values are blurred.](images/wxo-embed-snippet.png)
 3. If the embed panel is unavailable in your tenant, run `venv/bin/orchestrate agents list --kind native --verbose` and copy the `id` for the object whose `name` is `bb_master_agent`.
 
 ## Troubleshooting
