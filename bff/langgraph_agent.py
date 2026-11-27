@@ -17,8 +17,6 @@ import time
 from typing import Annotated, Any, Dict, List, Optional, TypedDict
 
 import snowflake.connector
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import serialization
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 
@@ -30,29 +28,7 @@ from bff.memory_manager import (
 )
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-KEY_PATH = ROOT / "snowflake" / "keys" / "rsa_key.p8"
 CHECKPOINT_DB_PATH = ROOT / "data" / "langgraph_checkpoints.db"
-
-
-def _load_rsa_private_key_der() -> Optional[bytes]:
-    """Load PKCS#8 RSA 2048 private key for Snowflake key-pair auth."""
-    if not KEY_PATH.exists():
-        return None
-    with open(KEY_PATH, "rb") as f:
-        key_bytes = f.read()
-    try:
-        p_key = serialization.load_pem_private_key(
-            key_bytes,
-            password=None,
-            backend=default_backend(),
-        )
-        return p_key.private_bytes(
-            encoding=serialization.Encoding.DER,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption(),
-        )
-    except Exception:
-        return None
 
 
 ROLE_TO_SVC_USER = {
@@ -72,19 +48,20 @@ def _execute_snowflake_query(
     params: Optional[tuple] = None,
 ) -> List[Dict[str, Any]]:
     """Execute query via Snowflake using role-specific service user & RSA key."""
-    svc_user = ROLE_TO_SVC_USER.get(role, "BB_BARISTA_SVC")
-    der_key = _load_rsa_private_key_der()
-    if not der_key:
-        raise RuntimeError("Snowflake RSA private key not found at snowflake/keys/rsa_key.p8")
+    svc_user = ROLE_TO_SVC_USER[role]
+    key_name = svc_user.removeprefix("BB_").removesuffix("_SVC").lower()
+    private_key = ROOT / "snowflake" / "keys" / f"{key_name}.p8"
+    if not private_key.is_file():
+        raise RuntimeError(f"Run the Snowflake lab bootstrap to generate {private_key.name}.")
 
-    account = os.getenv("SNOWFLAKE_ACCOUNT", "aazghcn-xm19614")
     conn = snowflake.connector.connect(
-        account=account,
+        account=os.environ["SNOWFLAKE_ACCOUNT"],
         user=svc_user,
         warehouse="BB_WH",
         database="BEAN_BREW",
         schema="CORE",
-        private_key=der_key,
+        authenticator="SNOWFLAKE_JWT",
+        private_key_file=str(private_key),
         session_parameters={"QUERY_TAG": f"langgraph-agent:{role}"},
     )
     try:

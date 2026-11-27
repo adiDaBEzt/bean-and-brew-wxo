@@ -136,7 +136,11 @@ Let me know if you need any additional facts extracted."""
 
     mock_single_obj = """{"category": "profile", "entity": "diet", "attribute": "constraint", "value": "vegan"}"""
 
-    with patch("httpx.Client.post") as mock_post:
+    with (
+        patch("bff.memory_manager.QWEN_ENDPOINT", "https://example.invalid/chat/completions"),
+        patch.dict(os.environ, {"ENABLE_REMOTE_LLM_EXTRACTION": "true"}),
+        patch("httpx.Client.post") as mock_post,
+    ):
         # Test 1: Markdown code fences with commentary
         mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {
@@ -157,14 +161,16 @@ Let me know if you need any additional facts extracted."""
         check("Empty dialogue returns empty triples list", len(triples_empty) == 0)
 
 
-def test_qwen_extraction():
+def test_local_extraction():
     dialogue1 = "User said: I always take oat milk in my latte. Assistant replied: I have noted your milk preference."
-    triples1 = extract_semantic_triples(dialogue1)
-    check("Live Qwen extracts structured triple from dialogue", len(triples1) > 0 and triples1[0].get("entity") == "milk")
+    with patch.dict(os.environ, {"ENABLE_REMOTE_LLM_EXTRACTION": "false"}):
+        triples1 = extract_semantic_triples(dialogue1)
+    check("Local extractor extracts structured triple from dialogue", len(triples1) > 0 and triples1[0].get("entity") == "milk")
 
     dialogue_none = "User said: What was our revenue yesterday? Assistant replied: Revenue was $5,000."
-    triples_none = extract_semantic_triples(dialogue_none)
-    check("Live Qwen ignores non-personal dialogue turns", len(triples_none) == 0)
+    with patch.dict(os.environ, {"ENABLE_REMOTE_LLM_EXTRACTION": "false"}):
+        triples_none = extract_semantic_triples(dialogue_none)
+    check("Local extractor ignores non-personal dialogue turns", len(triples_none) == 0)
 
 
 def main():
@@ -173,7 +179,7 @@ def main():
     test_user_isolation()
     test_vector_recall()
     test_robust_json_parsing_and_edge_cases()
-    test_qwen_extraction()
+    test_local_extraction()
 
     print(f"\n{sum(results)}/{len(results)} tests passed.")
     if not all(results):

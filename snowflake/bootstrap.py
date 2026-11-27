@@ -1,42 +1,69 @@
-"""Bootstrap the Bean & Brew Snowflake environment (idempotent).
-
-Order: infra -> tables -> seed -> governance -> role users -> verification.
-SAFETY: never alters existing users, account parameters or network policies.
-Reads secrets from ../.env; writes generated role-user passwords back to ../.env.
-"""
+"""Create the Bean & Brew resources in a clean Snowflake lab account."""
+import argparse
+from getpass import getpass
 import os
 import pathlib
 import random
-import re
-import secrets
 import sys
 from datetime import date, datetime, timedelta
 
 import snowflake.connector
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from dotenv import dotenv_values
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ENV_FILE = ROOT / ".env"
 SQL_DIR = pathlib.Path(__file__).resolve().parent
+KEY_DIR = SQL_DIR / "keys"
 
 ROLES = ["BARISTA", "MANAGER", "REGIONAL", "FINANCE", "HR"]
 
 
-def load_env():
-    env = {}
-    for line in ENV_FILE.read_text().splitlines():
-        if line and not line.startswith("#") and "=" in line:
-            k, v = line.split("=", 1)
-            env[k] = v
-    return env
+def require_clean_account(cur):
+    lab_resources = (
+        ("DATABASES", "BEAN_BREW", {"BEAN_BREW"}),
+        ("WAREHOUSES", "BB_WH", {"BB_WH"}),
+        ("ROLES", "BB_%", {"BB_ADMIN", *(f"BB_{role}" for role in ROLES)}),
+        ("USERS", "BB_%", {f"BB_{role}_SVC" for role in ROLES}),
+    )
+    conflicts = []
+    for object_type, pattern, expected_names in lab_resources:
+        cur.execute(f"SHOW {object_type} LIKE '{pattern}'")
+        name_index = next(index for index, field in enumerate(cur.description) if field[0].lower() == "name")
+        matches = sorted({row[name_index] for row in cur.fetchall()} & expected_names)
+        if matches:
+            conflicts.append(f"{object_type.lower()}: {', '.join(matches)}")
+    if conflicts:
+        raise SystemExit(f"Existing Snowflake objects block a fresh lab setup ({'; '.join(conflicts)}). See 'Step 2. Provision Snowflake' in README.md.")
 
 
-def save_env_var(key, value):
-    text = ENV_FILE.read_text()
-    if re.search(rf"^{key}=", text, flags=re.M):
-        text = re.sub(rf"^{key}=.*$", f"{key}={value}", text, flags=re.M)
-    else:
-        text += f"{key}={value}\n"
-    ENV_FILE.write_text(text)
+def service_public_keys():
+    KEY_DIR.mkdir(mode=0o700, exist_ok=True)
+    public_keys = {}
+    for role in ROLES:
+        private_path = KEY_DIR / f"{role.lower()}.p8"
+        if private_path.exists():
+            private_key = serialization.load_pem_private_key(private_path.read_bytes(), password=None)
+            if not isinstance(private_key, rsa.RSAPrivateKey) or private_key.key_size < 2048:
+                raise SystemExit(f"{private_path.name} must contain an RSA private key of at least 2048 bits.")
+        else:
+            private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            private_pem = private_key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )
+            with os.fdopen(os.open(private_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as private_file:
+                private_file.write(private_pem)
+        private_path.chmod(0o600)
+
+        public_pem = private_key.public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        private_path.with_suffix(".pub").write_bytes(public_pem)
+        public_keys[role] = "".join(public_pem.decode("ascii").splitlines()[1:-1])
+    return public_keys
 
 
 def run_file(cur, name):
@@ -124,39 +151,48 @@ def seed(cur):
 
 
 def main():
-    env = load_env()
-    conn = snowflake.connector.connect(
-        account=env["SNOWFLAKE_ACCOUNT"], user=env["SNOWFLAKE_ADMIN_USER"],
-        password=env["SNOWFLAKE_ADMIN_PASSWORD"], role="ACCOUNTADMIN")
-    cur = conn.cursor()
-    cur.execute("USE ROLE ACCOUNTADMIN")
-    run_file(cur, "01_infra.sql")
-    run_file(cur, "02_tables.sql")
-    seed(cur)
-    run_file(cur, "03_governance.sql")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--mfa", action="store_true", help="Prompt for a Snowflake authenticator app passcode.")
+    args = parser.parse_args()
+    if not ENV_FILE.is_file():
+        raise SystemExit("Create .env from .env.example before running this lab step.")
+    env = dotenv_values(ENV_FILE, interpolate=False)
+    account = env.get("SNOWFLAKE_ACCOUNT")
+    user = env.get("SNOWFLAKE_ADMIN_USER")
+    if not account or not user or account == "your-account-id" or user == "YOUR_ADMIN":
+        raise SystemExit("Set SNOWFLAKE_ACCOUNT and SNOWFLAKE_ADMIN_USER in .env before running this lab step.")
 
-    # role users: dedicated service users per role (never the admin)
-    cur.execute("USE ROLE ACCOUNTADMIN")
-    pub_key_path = ROOT / "snowflake" / "keys" / "rsa_key.pub"
-    pub_key_str = None
-    if pub_key_path.exists():
-        pub_text = pub_key_path.read_text()
-        pub_key_str = "".join(l.strip() for l in pub_text.splitlines() if not l.startswith("-----"))
+    login = {
+        "account": account,
+        "user": user,
+        "password": env.get("SNOWFLAKE_ADMIN_PASSWORD") or getpass("Snowflake admin password: "),
+        "role": "ACCOUNTADMIN",
+        "login_timeout": 60,
+    }
+    if args.mfa:
+        login["authenticator"] = "username_password_mfa"
+        login["passcode"] = getpass("Snowflake MFA passcode: ").strip()
 
-    for r in ROLES:
-        key = f"SNOWFLAKE_BB_{r}_PASSWORD"
-        pw = env.get(key) or secrets.token_urlsafe(18)
-        if not env.get(key):
-            save_env_var(key, pw)
-        cur.execute(
-            f"CREATE USER IF NOT EXISTS BB_{r}_SVC PASSWORD='{pw}' TYPE=LEGACY_SERVICE "
-            f"DEFAULT_ROLE=BB_{r} DEFAULT_WAREHOUSE=BB_WH MUST_CHANGE_PASSWORD=FALSE")
-        cur.execute(f"ALTER USER BB_{r}_SVC SET DEFAULT_ROLE=BB_{r} DEFAULT_WAREHOUSE=BB_WH")
-        if pub_key_str:
-            cur.execute(f"ALTER USER BB_{r}_SVC SET RSA_PUBLIC_KEY='{pub_key_str}'")
-        cur.execute(f"GRANT ROLE BB_{r} TO USER BB_{r}_SVC")
-    print("ok  role users configured (BB_*_SVC with RSA key-pair), admin user untouched")
-    conn.close()
+    with snowflake.connector.connect(**login) as conn, conn.cursor() as cur:
+        cur.execute("USE ROLE ACCOUNTADMIN")
+        require_clean_account(cur)
+        public_keys = service_public_keys()
+        # CREATE without IF NOT EXISTS claims the lab name before any other change.
+        cur.execute("CREATE DATABASE BEAN_BREW")
+        run_file(cur, "01_infra.sql")
+        run_file(cur, "02_tables.sql")
+        seed(cur)
+        run_file(cur, "03_governance.sql")
+
+        cur.execute("USE ROLE ACCOUNTADMIN")
+        for role, public_key in public_keys.items():
+            cur.execute(
+                f"CREATE USER BB_{role}_SVC TYPE=SERVICE DEFAULT_ROLE=BB_{role} "
+                "DEFAULT_WAREHOUSE=BB_WH RSA_PUBLIC_KEY=%s",
+                (public_key,),
+            )
+            cur.execute(f"GRANT ROLE BB_{role} TO USER BB_{role}_SVC")
+    print(f"ok  created {len(ROLES)} service users with RSA keys in snowflake/keys/")
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ display_name: Bean & Brew AI Assistant
 description: Official AI operations assistant for Bean & Brew coffee chain employees. Enforces role-based access control and scopes data per store/region.
 # llm: virtual-policy/bb-qwen-fallback
 llm: groq/openai/gpt-oss-120b
-style: react_core
+style: react
 memory_enabled: true
 context_access_enabled: true
 context_variables:

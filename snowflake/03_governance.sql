@@ -1,11 +1,11 @@
 -- 03_governance.sql: policies, views, grants. Run as BB_ADMIN.
--- Users are created by bootstrap.py (passwords are generated and kept in .env).
+-- The bootstrap creates the role-specific RSA service users.
 USE ROLE BB_ADMIN;
 USE WAREHOUSE BB_WH;
 USE SCHEMA BEAN_BREW.CORE;
 
--- ROW ACCESS: the tool sets session variables from the *signed* WXO context
--- (BB_STORE_ID, BB_REGION) and Snowflake enforces them, even if the tool's SQL is wrong.
+-- The tool sets BB_STORE_ID and BB_REGION for the selected scope.
+-- Snowflake filters rows using those session variables and the current role.
 CREATE OR REPLACE ROW ACCESS POLICY RAP_SCOPE AS (store_id STRING, region STRING) RETURNS BOOLEAN ->
   CASE
     WHEN CURRENT_ROLE() IN ('BB_ADMIN', 'ACCOUNTADMIN', 'SYSADMIN', 'BB_FINANCE', 'BB_HR') THEN TRUE
@@ -46,7 +46,7 @@ CREATE OR REPLACE TABLE _SALARY_FACTS AS
   FROM EMPLOYEES GROUP BY 1, 2, 3;
 CREATE OR REPLACE SECURE VIEW SALARY_SUMMARY AS SELECT * FROM _SALARY_FACTS;
 
--- GRANTS (least privilege, matches the RBAC matrix in docs/rbac.md)
+-- GRANTS (least privilege for the lab exercises)
 GRANT USAGE ON WAREHOUSE BB_WH TO ROLE BB_BARISTA;
 GRANT USAGE ON WAREHOUSE BB_WH TO ROLE BB_MANAGER;
 GRANT USAGE ON WAREHOUSE BB_WH TO ROLE BB_REGIONAL;

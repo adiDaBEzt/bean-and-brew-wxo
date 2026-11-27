@@ -1,49 +1,14 @@
-"""RBAC verification against Snowflake: every role x resource must match docs/rbac.md.
+"""RBAC verification against Snowflake: verify the lab role and policy matrix.
 Run: venv/bin/python tests/test_snowflake_rbac.py
 """
-import os
 import pathlib
 import sys
 
 import snowflake.connector
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import serialization
+from dotenv import dotenv_values
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-
-
-def load_env():
-    env = {}
-    for line in (ROOT / ".env").read_text().splitlines():
-        if line and not line.startswith("#") and "=" in line:
-            k, v = line.split("=", 1)
-            env[k] = v
-    return env
-
-
-ENV = load_env()
-KEY_PATH = ROOT / "snowflake" / "keys" / "rsa_key.p8"
-
-
-def _get_private_key_der():
-    if KEY_PATH.exists():
-        key_bytes = KEY_PATH.read_bytes()
-        p_key = serialization.load_pem_private_key(
-            key_bytes,
-            password=None,
-            backend=default_backend(),
-        )
-        return p_key.private_bytes(
-            encoding=serialization.Encoding.DER,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption(),
-        )
-    return None
-
-
-PRIVATE_KEY_DER = _get_private_key_der()
-assert PRIVATE_KEY_DER is not None, f"RSA 2048 PKCS#8 private key required at {KEY_PATH} for key-pair authentication"
-print(f"ok  loaded RSA PKCS#8 private key from {KEY_PATH} ({len(PRIVATE_KEY_DER)} DER bytes)")
+ENV = dotenv_values(ROOT / ".env")
 
 
 def connect(role):
@@ -53,7 +18,8 @@ def connect(role):
         "warehouse": "BB_WH",
         "database": "BEAN_BREW",
         "schema": "CORE",
-        "private_key": PRIVATE_KEY_DER,
+        "authenticator": "SNOWFLAKE_JWT",
+        "private_key_file": str(ROOT / "snowflake" / "keys" / f"{role.lower()}.p8"),
     }
     return snowflake.connector.connect(**conn_params)
 
@@ -63,9 +29,9 @@ def q(role, sql, store=None, region=None):
     cur = c.cursor()
     try:
         if store:
-            cur.execute(f"SET BB_STORE_ID='{store}'")
+            cur.execute("SET BB_STORE_ID = %s", (store,))
         if region:
-            cur.execute(f"SET BB_REGION='{region}'")
+            cur.execute("SET BB_REGION = %s", (region,))
         cur.execute(sql)
         return cur.fetchall()
     finally:
@@ -98,7 +64,7 @@ check("barista denied employees", denied("BARISTA", "select count(*) from employ
 rows = q("MANAGER", "select distinct store_id from sales", store="S01")
 check("manager sees only own store sales", rows == [("S01",)])
 rows = q("MANAGER", "select salary, email, phone from employees limit 3", store="S01")
-check("manager: salary masked", all(r[0] is None for r in rows))
+check("manager: salary masked", bool(rows) and all(r[0] is None for r in rows))
 check("manager: email/phone masked", all(r[1].startswith("*****") and r[2].startswith("***") for r in rows))
 check("manager can update own-store inventory",
       q("MANAGER", "update inventory set on_hand=on_hand where sku='SKU001'", store="S01")[0][0] == 1)
@@ -118,7 +84,7 @@ check("finance can read salary_summary", q("FINANCE", "select count(*) from sala
 
 # HR: everything in employees, unmasked
 rows = q("HR", "select salary, email from employees limit 3")
-check("hr sees salary and email", all(r[0] is not None and "*" not in r[1] for r in rows))
+check("hr sees salary and email", bool(rows) and all(r[0] is not None and "*" not in r[1] for r in rows))
 check("hr denied sales", denied("HR", "select count(*) from sales"))
 
 print(f"\n{sum(results)}/{len(results)} checks passed")

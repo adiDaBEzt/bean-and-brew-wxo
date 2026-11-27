@@ -4,8 +4,8 @@ name: bb_master_agent
 display_name: Bean & Brew Master Operations Agent
 description: Unified Master AI Operations Agent for Bean & Brew employees. Automatically inspects verified user identity and delegates requests to specialized sub-agents with strict role-based access control.
 # llm: virtual-policy/bb-qwen-fallback
-llm: groq/openai/gpt-oss-120b
-style: react_core
+llm: bedrock/us.anthropic.claude-sonnet-4-6
+style: react
 memory_enabled: true
 context_access_enabled: true
 context_variables:

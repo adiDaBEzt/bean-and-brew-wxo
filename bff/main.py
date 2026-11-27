@@ -1,12 +1,4 @@
-"""FastAPI Backend-For-Frontend (BFF) connecting to Unified Master Agent.
-
-Architecture:
-  1. All employees log in and interact with the unified Bean & Brew Master Agent.
-  2. The Master Agent routes requests to specialized collaborators (bb_hr_agent, bb_finance_agent)
-     or local tools, strictly enforcing RBAC based on tamper-proof context variables.
-  3. Mem0 automatically provides cross-session semantic memory per user.
-  4. Ephemeral OAuth tokens are minted with 300s TTL per session.
-"""
+"""Loopback demo backend for Keycloak, watsonx Orchestrate, and SQLite memory."""
 import json
 import os
 import pathlib
@@ -40,24 +32,24 @@ from bff.graph_rag import (
     seed_bean_brew_knowledge_graph,
 )
 from bff.langgraph_agent import compiled_agent
-from bff.oauth_broker import token_broker
+from bff.oauth_broker import ROLE_PERMISSIONS, token_broker
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 
-KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://localhost:8080")
+KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://127.0.0.1:8080")
 KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "bean-brew")
 KEYCLOAK_CLIENT_ID = os.getenv("KEYCLOAK_CLIENT_ID", "bb-web")
 KEYCLOAK_CLIENT_SECRET = os.getenv("KEYCLOAK_CLIENT_SECRET", "")
 DEMO_USER_PASSWORD = os.getenv("DEMO_USER_PASSWORD", "")
 
-WXO_URL = os.getenv("WXO_URL", "")
+WXO_URL = os.getenv("WXO_URL", "").rstrip("/")
 WXO_API_KEY = os.getenv("WXO_API_KEY", "")
 
-MASTER_AGENT_ID = os.getenv("WXO_MASTER_AGENT_ID", "05fa901e-df2a-469a-955e-c88c010ef832")
+MASTER_AGENT_ID = os.getenv("WXO_MASTER_AGENT_ID", "")
 MASTER_AGENT_NAME = os.getenv("WXO_MASTER_AGENT_NAME", "bb_master_agent")
 
-JWT_SECRET = os.getenv("BFF_JWT_SECRET", "bb-dev-secret-key-38291048123912093")
+JWT_SECRET = os.getenv("BFF_JWT_SECRET", "")
 JWT_ALGORITHM = "HS256"
 
 app = FastAPI(title="Bean & Brew Enterprise BFF API", version="3.0.0")
@@ -80,6 +72,8 @@ _iam_token_cache: Dict[str, any] = {"token": None, "expires_at": 0}
 
 
 async def get_wxo_iam_token() -> str:
+    if not all((WXO_URL, WXO_API_KEY, MASTER_AGENT_ID)):
+        raise HTTPException(status_code=503, detail="Set WXO_URL, WXO_API_KEY, and WXO_MASTER_AGENT_ID in .env.")
     now = time.time()
     if _iam_token_cache["token"] and _iam_token_cache["expires_at"] > now + 60:
         return _iam_token_cache["token"]
@@ -143,7 +137,7 @@ def create_session_token(profile: dict) -> str:
 
 
 def get_current_user(bb_session: Optional[str] = Cookie(None)) -> dict:
-    if not bb_session:
+    if not bb_session or not JWT_SECRET:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not logged in")
     try:
         payload = jwt.decode(bb_session, JWT_SECRET, algorithms=[JWT_ALGORITHM])
@@ -172,21 +166,12 @@ def get_me(user: dict = Depends(get_current_user)):
     )
 
 
-FALLBACK_PERSONAS = {
-    "maya": {"username": "maya", "email": "maya@beanandbrew.example", "role": "barista", "store_id": "S01", "region": "NORTH"},
-    "sam": {"username": "sam", "email": "sam@beanandbrew.example", "role": "store_manager", "store_id": "S01", "region": "NORTH"},
-    "priya": {"username": "priya", "email": "priya@beanandbrew.example", "role": "regional_manager", "store_id": "HQ", "region": "NORTH"},
-    "felix": {"username": "felix", "email": "felix@beanandbrew.example", "role": "finance_analyst", "store_id": "HQ", "region": "NORTH"},
-    "hana": {"username": "hana", "email": "hana@beanandbrew.example", "role": "hr_admin", "store_id": "HQ", "region": "NORTH"},
-}
-
-
 @app.post("/api/auth/login")
 async def login(req: LoginRequest, response: Response):
-    profile = None
-    pw = req.password or DEMO_USER_PASSWORD
-    token_url = f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/token"
+    if not all((KEYCLOAK_CLIENT_SECRET, DEMO_USER_PASSWORD, JWT_SECRET)):
+        raise HTTPException(status_code=503, detail="Generate the Keycloak realm and restart the backend.")
 
+    token_url = f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/token"
     try:
         async with httpx.AsyncClient() as client:
             res = await client.post(
@@ -196,40 +181,37 @@ async def login(req: LoginRequest, response: Response):
                     "client_id": KEYCLOAK_CLIENT_ID,
                     "client_secret": KEYCLOAK_CLIENT_SECRET,
                     "username": req.username,
-                    "password": pw,
+                    "password": req.password if req.password is not None else DEMO_USER_PASSWORD,
                     "scope": "openid profile email",
                 },
                 timeout=3.0,
             )
-            if res.status_code == 200:
-                access_token = res.json()["access_token"]
-                claims = jwt.get_unverified_claims(access_token)
-                roles = claims.get("roles", [])
-                primary_role = roles[0] if isinstance(roles, list) and roles else "barista"
-                profile = {
-                    "username": claims.get("preferred_username", req.username),
-                    "email": claims.get("email", f"{req.username}@beanandbrew.example"),
-                    "role": primary_role,
-                    "store_id": claims.get("store_id", "S01"),
-                    "region": claims.get("region", "NORTH"),
-                }
-    except Exception:
-        pass  # Keycloak offline or unreachable, fall through to demo persona fallback
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=503, detail="Keycloak is unavailable. Start the lab realm on port 8080.") from exc
 
-    if not profile:
-        uname = req.username.lower()
-        if uname in FALLBACK_PERSONAS:
-            profile = FALLBACK_PERSONAS[uname]
-        else:
-            profile = {
-                "username": req.username,
-                "email": f"{req.username}@beanandbrew.example",
-                "role": "barista",
-                "store_id": "S01",
-                "region": "NORTH",
-            }
+    if res.status_code >= 500:
+        raise HTTPException(status_code=502, detail="Keycloak is temporarily unavailable.")
+    if res.status_code != 200:
+        raise HTTPException(status_code=401, detail="Keycloak rejected the sign-in. Check the bean-brew realm and bb-web client.")
 
-    primary_role = profile["role"]
+    try:
+        # The backend obtained the token directly from its configured Keycloak endpoint.
+        # The browser only receives the distinct signed app session cookie below.
+        claims = jwt.get_unverified_claims(res.json()["access_token"])
+    except (KeyError, JWTError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="Keycloak returned an invalid token.") from exc
+
+    roles = claims.get("roles")
+    app_roles = [role for role in ROLE_PERMISSIONS if isinstance(roles, list) and role in roles]
+    profile = {key: claims.get(claim) for key, claim in (
+        ("username", "preferred_username"), ("email", "email"),
+        ("store_id", "store_id"), ("region", "region"),
+    )}
+    if len(app_roles) != 1 or not all(isinstance(value, str) and value for value in profile.values()):
+        raise HTTPException(status_code=403, detail="Keycloak did not return one Bean & Brew role and its store context.")
+    primary_role = app_roles[0]
+    profile["role"] = primary_role
+
     session_cookie = create_session_token(profile)
     response.set_cookie(
         key="bb_session",
@@ -438,7 +420,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
                                             "tool": tc.get("name"),
                                             "args": tc.get("args"),
                                             "status": "executing",
-                                            "auth": "Snowflake RSA 2048 PKCS#8 Key-Pair",
+                                            "auth": "Role-specific Snowflake connection",
                                         })
                                 elif sd.get("type") == "tool_response":
                                     formatted_steps.append({
@@ -485,7 +467,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
             "tool_calls": [],
             "steps": [],
         }
-        res = await asyncio.to_thread(compiled_agent.invoke, input_state, {"configurable": {"thread_id": req.thread_id or "local"}})
+        res = await asyncio.to_thread(compiled_agent.invoke, input_state, {"configurable": {"thread_id": f"{user_id}:{req.thread_id or 'local'}"}})
         return {
             "thread_id": req.thread_id or "local",
             "reply": res.get("final_reply", ""),
