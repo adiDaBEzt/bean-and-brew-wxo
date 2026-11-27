@@ -1,6 +1,51 @@
 import { useState, useEffect, useRef } from 'react'
+import type { ComponentProps } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import {
+  Accordion,
+  AccordionItem,
+  Button,
+  ClickableTile,
+  CodeSnippet,
+  Column,
+  Content,
+  Grid,
+  Header,
+  HeaderGlobalBar,
+  HeaderName,
+  IconButton,
+  InlineLoading,
+  InlineNotification,
+  Layer,
+  StructuredListBody,
+  StructuredListCell,
+  StructuredListRow,
+  StructuredListWrapper,
+  Tab,
+  TabList,
+  TabPanel,
+  TabPanels,
+  Tabs,
+  Tag,
+  TextInput,
+  Theme,
+  Tile,
+} from '@carbon/react'
+import {
+  Analytics,
+  Close,
+  Cafe,
+  Finance,
+  Logout,
+  Report,
+  Search,
+  Send,
+  TrashCan,
+  UserAdmin,
+  UserMultiple,
+  ShoppingCatalog,
+} from '@carbon/icons-react'
 import './App.css'
 
 interface DynamicToken {
@@ -29,15 +74,25 @@ interface Message {
   steps?: any[]
   agent_used?: string
   timestamp: string
+  tone?: 'error'
 }
 
+type TagType = 'red' | 'magenta' | 'purple' | 'blue' | 'cyan' | 'teal' | 'green' | 'gray' | 'cool-gray' | 'warm-gray' | 'high-contrast' | 'outline'
+
 const DEMO_PERSONAS = [
-  { username: 'maya', name: 'Maya Chen', role: 'barista', store: 'S01', badge: 'Barista (Store S01)', icon: '☕' },
-  { username: 'sam', name: 'Sam Rivera', role: 'store_manager', store: 'S01', badge: 'Store Manager (S01)', icon: '📋' },
-  { username: 'priya', name: 'Priya Nair', role: 'regional_manager', store: 'HQ', badge: 'Regional Mgr (North)', icon: '📊' },
-  { username: 'felix', name: 'Felix Weber', role: 'finance_analyst', store: 'HQ', badge: 'Finance Analyst', icon: '💼' },
-  { username: 'hana', name: 'Hana Sato', role: 'hr_admin', store: 'HQ', badge: 'HR Administrator', icon: '👥' },
+  { username: 'maya', name: 'Maya Chen', role: 'barista', badge: 'Barista · Store S01', icon: Cafe, tag: 'warm-gray' as TagType,
+    blurb: 'Checks stock at her own store. No access to employee data.' },
+  { username: 'sam', name: 'Sam Rivera', role: 'store_manager', badge: 'Store manager · S01', icon: ShoppingCatalog, tag: 'blue' as TagType,
+    blurb: 'Runs the S01 team and restocks. Sees the roster with salary and contacts masked.' },
+  { username: 'priya', name: 'Priya Nair', role: 'regional_manager', badge: 'Regional manager · North', icon: Report, tag: 'teal' as TagType,
+    blurb: 'Compares sales and inventory across the stores in her region.' },
+  { username: 'felix', name: 'Felix Weber', role: 'finance_analyst', badge: 'Finance analyst · HQ', icon: Finance, tag: 'green' as TagType,
+    blurb: 'Reads payroll and sales aggregates, never individual salaries.' },
+  { username: 'hana', name: 'Hana Sato', role: 'hr_admin', badge: 'HR administrator · HQ', icon: UserAdmin, tag: 'purple' as TagType,
+    blurb: 'Sees the full employee record, including salary and contacts.' },
 ]
+
+const ROLE_TAG: Record<string, TagType> = Object.fromEntries(DEMO_PERSONAS.map(p => [p.role, p.tag]))
 
 const ROLE_SUGGESTIONS: Record<string, string[]> = {
   barista: [
@@ -66,7 +121,23 @@ const ROLE_SUGGESTIONS: Record<string, string[]> = {
   ],
 }
 
+const PREFERENCE_PROMPTS = [
+  { label: 'Switch to almond milk', prompt: 'I switched to almond milk, please use that.' },
+  { label: 'Prefer oat milk', prompt: 'I prefer oat milk in my drinks.' },
+  { label: 'Format as tables', prompt: 'Always format my responses in markdown tables.' },
+  { label: 'Lookback 14 days', prompt: 'Default lookback window to 14 days.' },
+]
+
 const CHAT_REQUEST_TIMEOUT_MS = 120_000
+
+// Render agent markdown tables with Carbon data-table styling.
+const markdownComponents = {
+  table: (props: ComponentProps<'table'>) => (
+    <div className="bb-table-wrap">
+      <table className="cds--data-table cds--data-table--sm" {...props} />
+    </div>
+  ),
+}
 
 export default function App() {
   const [user, setUser] = useState<UserProfile | null>(null)
@@ -77,12 +148,12 @@ export default function App() {
   const [threadId, setThreadId] = useState<string | null>(null)
   const [inspectAudit, setInspectAudit] = useState<any | null>(null)
   const [inspectorOpen, setInspectorOpen] = useState(false)
-  const [activeTab, setActiveTab] = useState<'audit' | 'identity' | 'memory'>('audit')
+  const [activeTab, setActiveTab] = useState(0)
   const [memories, setMemories] = useState<any[]>([])
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inspectorHeadingRef = useRef<HTMLHeadingElement>(null)
   const traceHeadingRef = useRef<HTMLHeadingElement>(null)
-  const inspectorTriggerRef = useRef<HTMLButtonElement>(null)
+  const inspectorTriggerRef = useRef<HTMLButtonElement | null>(null)
 
   const refreshMemories = async () => {
     try {
@@ -111,13 +182,8 @@ export default function App() {
 
   const handleClearMemory = async () => {
     try {
-      const res = await fetch('/api/memory/clear', {
-        method: 'POST',
-        credentials: 'include'
-      })
-      if (res.ok) {
-        setMemories([])
-      }
+      const res = await fetch('/api/memory/clear', { method: 'POST', credentials: 'include' })
+      if (res.ok) setMemories([])
     } catch {}
   }
 
@@ -155,7 +221,7 @@ export default function App() {
           {
             id: 'welcome',
             role: 'assistant',
-            content: `☕ **Welcome ${u.username}!**\n\nSigned in through **Keycloak** as **${u.role}** (Store **${u.store_id}**, Region **${u.region}**).\n\nYou are connected to the **Bean & Brew Master Operations Agent** with Zero Trust Multi-Agent Collaborators (\`bb_hr_agent\`, \`bb_finance_agent\`) and native session memory.\n\n*Demo session marker: \`${u.dynamic_token?.token?.slice(0, 16)}...\` (Valid for 300s).*`,
+            content: `**Welcome, ${u.username}.**\n\nYou signed in through **Keycloak** as **${u.role}** (store **${u.store_id}**, region **${u.region}**).\n\nYou're talking to the **Bean & Brew Master Operations Agent**. It routes HR and finance questions to its collaborator agents (\`bb_hr_agent\`, \`bb_finance_agent\`) and remembers your preferences for this session.\n\n*Demo session marker: \`${u.dynamic_token?.token?.slice(0, 16)}...\` (valid for 300 s).*`,
             timestamp: new Date().toLocaleTimeString()
           }
         ])
@@ -181,7 +247,7 @@ export default function App() {
     setMemories([])
   }
 
-  const openInspector = (trigger: HTMLButtonElement, showTrace = false) => {
+  const openInspector = (trigger: HTMLButtonElement | null, showTrace = false) => {
     inspectorTriggerRef.current = trigger
     setInspectorOpen(true)
     requestAnimationFrame(() => {
@@ -200,14 +266,21 @@ export default function App() {
     if (!queryText.trim() || loading || !user) return
 
     setInput('')
-    const userMsg: Message = {
+    setMessages(prev => [...prev, {
       id: Date.now().toString(),
       role: 'user',
       content: queryText,
       timestamp: new Date().toLocaleTimeString()
-    }
-    setMessages(prev => [...prev, userMsg])
+    }])
     setLoading(true)
+
+    const addError = (content: string) => setMessages(prev => [...prev, {
+      id: (Date.now() + 1).toString(),
+      role: 'assistant',
+      content,
+      tone: 'error',
+      timestamp: new Date().toLocaleTimeString()
+    }])
 
     try {
       const res = await fetch('/api/chat', {
@@ -220,18 +293,15 @@ export default function App() {
       if (res.ok) {
         const data = await res.json()
         setThreadId(data.thread_id)
-        const botMsg: Message = {
+        setMessages(prev => [...prev, {
           id: (Date.now() + 1).toString(),
           role: 'assistant',
           content: data.reply?.trim() ? data.reply : 'The agent finished without a reply. Try sending your message again.',
           steps: data.steps,
           agent_used: data.agent_used,
           timestamp: new Date().toLocaleTimeString()
-        }
-        setMessages(prev => [...prev, botMsg])
-        if (data.memories) {
-          setMemories(data.memories)
-        }
+        }])
+        if (data.memories) setMemories(data.memories)
         setInspectAudit({
           steps: data.steps,
           agent_used: data.agent_used,
@@ -239,431 +309,410 @@ export default function App() {
           token: data.dynamic_token
         })
       } else {
-        const err = await res.json()
-        setMessages(prev => [
-          ...prev,
-          {
-            id: (Date.now() + 1).toString(),
-            role: 'assistant',
-            content: `⛔ ${err.detail || 'Access Denied or Execution Error'}`,
-            timestamp: new Date().toLocaleTimeString()
-          }
-        ])
+        const err = await res.json().catch(() => ({}))
+        addError(err.detail || 'Access denied or execution error.')
       }
     } catch (error) {
       const detail = error instanceof Error ? error.message : 'Unknown error'
-      const message = error instanceof DOMException && error.name === 'TimeoutError'
+      addError(error instanceof DOMException && error.name === 'TimeoutError'
         ? 'The agent is taking longer than expected. Try sending your message again.'
-        : `⚠️ Network error: ${detail}`
-      setMessages(prev => [
-        ...prev,
-        {
-          id: (Date.now() + 1).toString(),
-          role: 'assistant',
-          content: message,
-          timestamp: new Date().toLocaleTimeString()
-        }
-      ])
+        : `Network error: ${detail}`)
     } finally {
       setLoading(false)
     }
   }
 
+  /* ---------------------------------------------------------------- sign-in */
+
   if (!user) {
     return (
-      <div className="login-screen">
-        <div className="login-hero-card">
-          <div className="hero-visual-pane">
-            <img src="/hero.jpg" alt="Bean & Brew Coffee Bar" className="hero-banner-image" />
-            <div className="hero-gradient-overlay">
-              <span className="hero-subtitle-tag">ENTERPRISE MULTI-AGENT PLATFORM</span>
-              <h3>Artisan Roastery Operations</h3>
-              <p>
-                IBM Watsonx Orchestrate • Zero Trust Collaborator Routing • Snowflake RSA Key-Pair Security
-              </p>
-            </div>
-          </div>
-
-          <div className="login-form-pane">
-            <div className="brand-header-box">
-              <img src="/logo.jpg" alt="Bean & Brew Logo" className="login-logo-img" />
-              <div>
-                <h2>Bean & Brew AI Portal</h2>
-                <p className="subtitle">
-                  Select an authenticated persona to test role-based access, collaborator routing, and ephemeral tokens.
+      <>
+        <Theme theme="g100">
+          <Header aria-label="Bean & Brew Operations AI">
+            <HeaderName href="#" prefix="Bean & Brew">Operations AI</HeaderName>
+          </Header>
+        </Theme>
+        <Theme theme="g10" className="bb-page">
+          <Content className="bb-login">
+            <Grid>
+              <Column sm={4} md={8} lg={6} className="bb-login__intro">
+                <p className="bb-eyebrow">IBM watsonx Orchestrate · Snowflake · Keycloak</p>
+                <h1 className="bb-login__title">Governed AI agents for store operations</h1>
+                <p className="bb-login__lead">
+                  One assistant answers questions about inventory, sales and staff. What each person gets back
+                  is decided by their identity and by Snowflake policies, not by the model.
                 </p>
-              </div>
-            </div>
+                <StructuredListWrapper isCondensed aria-label="How access is enforced" className="bb-login__layers">
+                  <StructuredListBody>
+                    {[
+                      ['Keycloak', 'Signs the user in with role, store and region claims.'],
+                      ['Orchestrate', 'Routes to tools and to HR and finance collaborator agents.'],
+                      ['Snowflake', 'Row access and masking policies decide the rows and columns returned.'],
+                    ].map(([k, v]) => (
+                      <StructuredListRow key={k}>
+                        <StructuredListCell noWrap className="bb-strong">{k}</StructuredListCell>
+                        <StructuredListCell>{v}</StructuredListCell>
+                      </StructuredListRow>
+                    ))}
+                  </StructuredListBody>
+                </StructuredListWrapper>
+              </Column>
 
-            <div className="persona-selection">
-              <h4>Select Employee Persona:</h4>
-              <div className="persona-grid">
-                {DEMO_PERSONAS.map(p => (
-                  <button
-                    key={p.username}
-                    className="persona-btn"
-                    onClick={() => handleLogin(p.username)}
-                    disabled={loading}
-                  >
-                    <div className="persona-top">
-                      <span className="persona-icon">{p.icon}</span>
-                      <span className="p-title">{p.name}</span>
-                    </div>
-                    <div className="p-badge">{p.badge}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
+              <Column sm={4} md={8} lg={10}>
+                <h2 className="bb-section-title">Select an employee persona</h2>
+                <p className="bb-helper">Sign in as one of five synthetic users to compare what each role can see.</p>
 
-            {loginError && <p className="login-status-pill" role="alert">{loginError}</p>}
-            {loading && (
-              <div className="login-status-pill">
-                <span className="status-spinner"></span>
-                <span>Authenticating with Keycloak & initializing session...</span>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+                {loginError && (
+                  <InlineNotification
+                    kind="error"
+                    title="Sign-in failed"
+                    subtitle={loginError}
+                    lowContrast
+                    hideCloseButton
+                    role="alert"
+                  />
+                )}
+                {loading && <InlineLoading description="Authenticating with Keycloak and starting a session..." />}
+
+                <div className="bb-persona-grid">
+                  {DEMO_PERSONAS.map(p => {
+                    const Icon = p.icon
+                    return (
+                      <ClickableTile
+                        key={p.username}
+                        className="bb-persona"
+                        onClick={() => handleLogin(p.username)}
+                        disabled={loading}
+                      >
+                        <div className="bb-persona__top">
+                          <Icon size={24} aria-hidden="true" />
+                          <Tag type={p.tag} size="sm">{p.role}</Tag>
+                        </div>
+                        <h3 className="bb-persona__name">{p.name}</h3>
+                        <p className="bb-persona__badge">{p.badge}</p>
+                        <p className="bb-persona__blurb">{p.blurb}</p>
+                      </ClickableTile>
+                    )
+                  })}
+                </div>
+              </Column>
+            </Grid>
+          </Content>
+        </Theme>
+      </>
     )
   }
+
+  /* ------------------------------------------------------------- workspace */
 
   const suggestions = ROLE_SUGGESTIONS[user.role] || []
 
   return (
-    <div className="app-container">
-      {/* App Header */}
-      <header className="app-header">
-        <div className="header-brand">
-          <img src="/logo.jpg" alt="Bean & Brew Logo" className="header-logo-img" />
-          <div className="brand-info">
-            <div className="title-row">
-              <h3>Bean & Brew</h3>
-              <span className="artisan-badge">Operations AI</span>
-            </div>
-            <span className="model-tag">Master Operations Agent • Multi-Agent Collaborators • Snowflake RSA</span>
-          </div>
-        </div>
-
-        <div className="user-profile-strip">
-          <div className="agent-badge-pill">
-            <span className="agent-indicator-dot"></span>
-            <span>Master Operations Agent</span>
-          </div>
-
-          <div className="user-meta">
-            <span className="user-name">👤 {user.username}</span>
-            <span className="role-pill">{user.role}</span>
-            <span className="store-pill">Store {user.store_id}</span>
-          </div>
-          <button className="logout-btn" onClick={handleLogout}>Switch User</button>
-        </div>
-      </header>
-
-      {/* Main Chat Layout */}
-      <div className="chat-layout">
-        <div className="chat-main">
-          <div className="message-list">
-            {messages.map(m => (
-              <div key={m.id} className={`message-bubble ${m.role}`}>
-                <div className="bubble-header">
-                  <span className="author">
-                    {m.role === 'user' ? user.username : (m.agent_used || 'Master Operations Agent')}
-                  </span>
-                  <span className="time">{m.timestamp}</span>
-                </div>
-
-                {/* Rendered Markdown Body with HTML Tables */}
-                <div className="bubble-content markdown-body">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {m.content}
-                  </ReactMarkdown>
-                </div>
-
-                {m.steps && m.steps.length > 0 && (
-                  <div className="bubble-footer">
-                    <button
-                      className="audit-btn"
-                      aria-controls="agent-inspector"
-                      onClick={(event) => {
-                        setInspectAudit({
-                          steps: m.steps,
-                          agent_used: m.agent_used,
-                          thread_id: threadId,
-                          token: user.dynamic_token
-                        })
-                        setActiveTab('audit')
-                        openInspector(event.currentTarget, true)
-                      }}
-                    >
-                      🔍 Inspect Agent Routing & Tool Audit
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
-
-            {loading && (
-              <div className="message-bubble assistant loading-indicator" role="status">
-                <span className="dots">☕ Master Agent reasoning & evaluating Zero Trust policies...</span>
-              </div>
-            )}
-            <div ref={messagesEndRef} />
-          </div>
-
-          {/* Quick Suggestions Strip */}
-          <div className="suggestions-strip">
-            <span className="suggestions-label">Quick Actions:</span>
-            <button
-              className="audit-btn inspector-toggle"
+    <>
+      <Theme theme="g100">
+        <Header aria-label="Bean & Brew Operations AI">
+          <HeaderName href="#" prefix="Bean & Brew">Operations AI</HeaderName>
+          <HeaderGlobalBar className="bb-header-bar">
+            <span className="bb-header-user">{user.username}</span>
+            <Tag type={ROLE_TAG[user.role] || 'gray'} size="sm">{user.role}</Tag>
+            <Tag type="outline" size="sm">Store {user.store_id}</Tag>
+            <Button
+              kind="ghost"
+              size="sm"
+              className="bb-header-btn"
               aria-controls="agent-inspector"
               aria-expanded={inspectorOpen}
-              onClick={(event) => openInspector(event.currentTarget)}
+              renderIcon={Analytics}
+              onClick={(e) => inspectorOpen ? closeInspector() : openInspector(e.currentTarget as HTMLButtonElement)}
             >
               Inspector
-            </button>
-            {suggestions.map((s, idx) => (
-              <button
-                key={idx}
-                className="suggestion-chip"
-                onClick={() => sendQuery(s)}
-                disabled={loading}
-              >
-                {s}
-              </button>
-            ))}
-          </div>
+            </Button>
+            <Button kind="ghost" size="sm" className="bb-header-btn" renderIcon={Logout} onClick={handleLogout}>
+              Switch User
+            </Button>
+          </HeaderGlobalBar>
+        </Header>
+      </Theme>
 
-          {/* Chat Input Bar */}
-          <form className="input-bar" onSubmit={(e) => { e.preventDefault(); sendQuery(input); }}>
-            <input
-              type="text"
-              placeholder={`Ask Master Agent as ${user.role} (e.g. inventory, team roster, sales statistics)...`}
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              disabled={loading}
-            />
-            <button type="submit" disabled={loading || !input.trim()}>Send</button>
-          </form>
-        </div>
+      <Theme theme="g10" className="bb-page">
+        <div className={inspectorOpen ? 'bb-workspace bb-workspace--inspector' : 'bb-workspace'}>
+          <main className="bb-chat" aria-label="Conversation">
+            <div className="bb-chat__agent">
+              <UserMultiple size={16} aria-hidden="true" />
+              <span>Master Operations Agent</span>
+              <Tag type="green" size="sm">Live</Tag>
+            </div>
 
-        {/* Minimal Clean Inspector Drawer */}
-        <aside
-          id="agent-inspector"
-          className={inspectorOpen ? 'audit-drawer is-open' : 'audit-drawer'}
-          aria-labelledby="agent-inspector-title"
-        >
-          <div className="drawer-header">
-            <h4 id="agent-inspector-title" ref={inspectorHeadingRef} tabIndex={-1}>Agent & Security Inspector</h4>
-            <button className="audit-btn inspector-close" onClick={closeInspector}>Close</button>
-          </div>
-
-          <div className="tab-buttons">
-            <button
-              className={activeTab === 'audit' ? 'tab-btn active' : 'tab-btn'}
-              onClick={() => setActiveTab('audit')}
-            >
-              Execution Audit
-            </button>
-            <button
-              className={activeTab === 'identity' ? 'tab-btn active' : 'tab-btn'}
-              onClick={() => setActiveTab('identity')}
-            >
-              Identity & Token
-            </button>
-            <button
-              className={activeTab === 'memory' ? 'tab-btn active' : 'tab-btn'}
-              onClick={() => setActiveTab('memory')}
-            >
-              🧠 Memory {memories.length > 0 && `(${memories.length})`}
-            </button>
-          </div>
-
-          <div className="drawer-body">
-            {activeTab === 'audit' && (
-              <div className="audit-tab-content">
-                <div className="inspector-card">
-                  <div className="card-label">Active Orchestrator:</div>
-                  <div className="card-val">
-                    <strong>bb_master_agent</strong>
-                  </div>
-                  <div className="card-sub">
-                    Session Thread: <code>{threadId || 'Initialized on first message'}</code>
-                  </div>
-                </div>
-
-                <div className="collaborator-architecture-card">
-                  <div className="card-label">Available Multi-Agent Collaborators:</div>
-                  <div className="collab-item">
-                    <span className="collab-dot hr"></span>
-                    <div>
-                      <strong>bb_hr_agent</strong>
-                      <p>Employee rosters, personnel directory (Salaries masked for Store Managers).</p>
-                    </div>
-                  </div>
-                  <div className="collab-item">
-                    <span className="collab-dot finance"></span>
-                    <div>
-                      <strong>bb_finance_agent</strong>
-                      <p>Company-wide sales aggregates & salary statistics (Finance Analysts only).</p>
-                    </div>
-                  </div>
-                  <div className="collab-item">
-                    <span className="collab-dot tool"></span>
-                    <div>
-                      <strong>Direct Snowflake Tools</strong>
-                      <p><code>bb_get_inventory</code>, <code>bb_restock_inventory</code> via RSA key-pair auth.</p>
-                    </div>
-                  </div>
-                </div>
-
-                <h5 className="subgraph-section-title" ref={traceHeadingRef} tabIndex={-1}>🔍 Tool & Routing Traces</h5>
-                {inspectAudit?.steps && inspectAudit.steps.length > 0 ? (
-                  <div className="steps-list">
-                    {inspectAudit.steps.map((st: any, idx: number) => (
-                      <div key={idx} className="step-card">
-                        <div className="step-top">
-                          <span className="step-badge">{st.node || 'tool_call'}</span>
-                          <span className="step-status">{st.status || 'executed'}</span>
-                        </div>
-                        {st.tool && (
-                          <div className="step-info-row">
-                            <span>Tool: <strong>{st.tool}</strong></span>
-                            {st.user && <span>User: <code>{st.user}</code></span>}
-                          </div>
-                        )}
-                        {st.auth && (
-                          <div className="step-auth-pill">
-                            🔐 Auth: {st.auth}
-                          </div>
-                        )}
+            <div className="bb-messages" aria-live="polite">
+              {messages.map(m => (
+                <div key={m.id} className={`bb-message bb-message--${m.role}`}>
+                  <Layer>
+                    <Tile className={m.tone === 'error' ? 'bb-bubble bb-bubble--error' : 'bb-bubble'}>
+                      <div className="bb-bubble__meta">
+                        <span className="bb-bubble__author">
+                          {m.role === 'user' ? user.username : (m.agent_used || 'Master Operations Agent')}
+                        </span>
+                        <span className="bb-bubble__time">{m.timestamp}</span>
                       </div>
-                    ))}
-                    <details className="raw-json-details">
-                      <summary>View Raw Trace JSON</summary>
-                      <pre className="audit-json">
-                        {JSON.stringify(inspectAudit.steps, null, 2)}
-                      </pre>
-                    </details>
-                  </div>
-                ) : (
-                  <p className="empty-sub">Send a message or click 'Inspect Agent Routing & Tool Audit' on any response to view live traces.</p>
-                )}
-              </div>
-            )}
-
-            {activeTab === 'identity' && (
-              <div className="identity-tab-content">
-                <div className="inspector-card">
-                  <div className="card-label">Verified Context Variables:</div>
-                  <div className="context-vars-list">
-                    <div className="context-row">
-                      <span>bb_role</span>
-                      <strong>{user.role}</strong>
-                    </div>
-                    <div className="context-row">
-                      <span>bb_store_id</span>
-                      <strong>Store {user.store_id}</strong>
-                    </div>
-                    <div className="context-row">
-                      <span>bb_region</span>
-                      <strong>{user.region}</strong>
-                    </div>
-                    <div className="context-row">
-                      <span>bb_email</span>
-                      <strong>{user.email}</strong>
-                    </div>
-                  </div>
+                      <div className="bb-markdown">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                          {m.content}
+                        </ReactMarkdown>
+                      </div>
+                      {m.steps && m.steps.length > 0 && (
+                        <Button
+                          kind="ghost"
+                          size="sm"
+                          renderIcon={Search}
+                          className="bb-bubble__audit"
+                          aria-controls="agent-inspector"
+                          onClick={(event) => {
+                            setInspectAudit({
+                              steps: m.steps,
+                              agent_used: m.agent_used,
+                              thread_id: threadId,
+                              token: user.dynamic_token
+                            })
+                            setActiveTab(0)
+                            openInspector(event.currentTarget as HTMLButtonElement, true)
+                          }}
+                        >
+                          Inspect Agent Routing & Tool Audit
+                        </Button>
+                      )}
+                    </Tile>
+                  </Layer>
                 </div>
+              ))}
 
-                <div className="inspector-card">
-                  <div className="card-label">Demo session marker:</div>
-                  <div className="token-meta-row">
-                    <span>Snowflake User:</span>
-                    <code>{user.dynamic_token?.snowflake_user}</code>
-                  </div>
-                  <div className="token-meta-row">
-                    <span>Snowflake Role:</span>
-                    <code>{user.dynamic_token?.snowflake_role}</code>
-                  </div>
-                  <div className="token-meta-row">
-                    <span>Granted Scopes:</span>
-                    <span>{user.dynamic_token?.scopes?.join(', ')}</span>
-                  </div>
-                  <div className="token-meta-row">
-                    <span>TTL:</span>
-                    <span className="ttl-badge">300s</span>
-                  </div>
-                  <div className="token-code-box">
-                    <code>{user.dynamic_token?.token}</code>
-                  </div>
+              {loading && (
+                <div className="bb-message bb-message--assistant" role="status">
+                  <InlineLoading description="Master Agent reasoning & evaluating Zero Trust policies..." />
                 </div>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+
+            <div className="bb-composer">
+              <div className="bb-suggestions" role="group" aria-label="Quick actions">
+                <span className="bb-suggestions__label">Quick actions</span>
+                {suggestions.map(s => (
+                  <Button key={s} kind="tertiary" size="sm" onClick={() => sendQuery(s)} disabled={loading}>
+                    {s}
+                  </Button>
+                ))}
               </div>
-            )}
+              <form className="bb-input" onSubmit={(e) => { e.preventDefault(); sendQuery(input) }}>
+                <TextInput
+                  id="bb-chat-input"
+                  labelText="Message"
+                  hideLabel
+                  size="lg"
+                  placeholder={`Ask as ${user.role}: inventory, team roster, sales...`}
+                  value={input}
+                  onChange={e => setInput(e.target.value)}
+                  disabled={loading}
+                />
+                <Button type="submit" size="lg" renderIcon={Send} disabled={loading || !input.trim()}>
+                  Send
+                </Button>
+              </form>
+            </div>
+          </main>
 
-            {activeTab === 'memory' && (
-              <div className="memory-tab-content">
-                <div className="inspector-card">
-                  <div className="card-label">Dynamic EAV Preference State:</div>
-                  <p className="card-desc">
-                    Contradiction-free atomic slot memory. When preferences change, slots are dynamically updated with zero duplicates.
-                  </p>
+          <aside
+            id="agent-inspector"
+            className="bb-inspector"
+            aria-labelledby="agent-inspector-title"
+            hidden={!inspectorOpen}
+          >
+            <div className="bb-inspector__header">
+              <h2 id="agent-inspector-title" ref={inspectorHeadingRef} tabIndex={-1}>
+                Agent & Security Inspector
+              </h2>
+              <IconButton kind="ghost" size="sm" label="Close" align="left" onClick={closeInspector}>
+                <Close />
+              </IconButton>
+            </div>
 
-                  {memories.length > 0 ? (
-                    <div className="memory-cards-list">
-                      {memories.map((m: any, idx: number) => (
-                        <div key={idx} className="memory-badge-card">
-                          <div className="memory-badge-top">
-                            <span className="memory-cat-pill">{m.category}</span>
-                            <span className="memory-time">{m.updated_at ? m.updated_at.split(' ')[1] : 'active'}</span>
-                          </div>
-                          <div className="memory-fact-text">
-                            <strong>{m.entity}</strong> <span>({m.attribute})</span>: <span className="memory-val">{m.value}</span>
-                          </div>
-                          <button
-                            className="del-memory-btn"
-                            onClick={() => handleDeleteMemory(m.entity)}
-                            title="Delete preference"
-                          >
-                            ×
-                          </button>
-                        </div>
+            <Tabs selectedIndex={activeTab} onChange={({ selectedIndex }) => setActiveTab(selectedIndex)}>
+              <TabList aria-label="Inspector views" contained fullWidth>
+                <Tab>Execution Audit</Tab>
+                <Tab>Identity & Token</Tab>
+                <Tab>Memory{memories.length > 0 ? ` (${memories.length})` : ''}</Tab>
+              </TabList>
+              <TabPanels>
+                {/* Execution audit */}
+                <TabPanel className="bb-panel">
+                  <Tile className="bb-card">
+                    <p className="bb-label">Active orchestrator</p>
+                    <p className="bb-strong">bb_master_agent</p>
+                    <p className="bb-helper">
+                      Session thread: <code>{threadId || 'starts on the first message'}</code>
+                    </p>
+                  </Tile>
+
+                  <Tile className="bb-card">
+                    <p className="bb-label">Collaborators and tools</p>
+                    <StructuredListWrapper isCondensed aria-label="Collaborators">
+                      <StructuredListBody>
+                        <StructuredListRow>
+                          <StructuredListCell noWrap><Tag type="purple" size="sm">bb_hr_agent</Tag></StructuredListCell>
+                          <StructuredListCell>Rosters and personnel directory. Salaries masked for store managers.</StructuredListCell>
+                        </StructuredListRow>
+                        <StructuredListRow>
+                          <StructuredListCell noWrap><Tag type="green" size="sm">bb_finance_agent</Tag></StructuredListCell>
+                          <StructuredListCell>Sales aggregates and salary statistics. Finance analysts only.</StructuredListCell>
+                        </StructuredListRow>
+                        <StructuredListRow>
+                          <StructuredListCell noWrap><Tag type="blue" size="sm">Snowflake tools</Tag></StructuredListCell>
+                          <StructuredListCell><code>bb_get_inventory</code>, <code>bb_restock_inventory</code> over RSA key-pair auth.</StructuredListCell>
+                        </StructuredListRow>
+                      </StructuredListBody>
+                    </StructuredListWrapper>
+                  </Tile>
+
+                  <h3 className="bb-section-title" ref={traceHeadingRef} tabIndex={-1}>Tool & Routing Traces</h3>
+                  {inspectAudit?.steps && inspectAudit.steps.length > 0 ? (
+                    <>
+                      <ol className="bb-steps">
+                        {inspectAudit.steps.map((st: any, idx: number) => (
+                          <li key={idx} className="bb-step">
+                            <div className="bb-step__top">
+                              <Tag type="cool-gray" size="sm">{st.node || 'tool_call'}</Tag>
+                              <Tag type={st.status === 'error' ? 'red' : 'green'} size="sm">{st.status || 'executed'}</Tag>
+                            </div>
+                            {st.tool && (
+                              <p className="bb-step__row">
+                                Tool <strong>{st.tool}</strong>
+                                {st.user && <> · user <code>{st.user}</code></>}
+                              </p>
+                            )}
+                            {st.auth && <p className="bb-helper">Auth: {st.auth}</p>}
+                          </li>
+                        ))}
+                      </ol>
+                      <Accordion size="sm">
+                        <AccordionItem title="View Raw Trace JSON">
+                          <CodeSnippet type="multi" feedback="Copied" maxCollapsedNumberOfRows={20} wrapText>
+                            {JSON.stringify(inspectAudit.steps, null, 2)}
+                          </CodeSnippet>
+                        </AccordionItem>
+                      </Accordion>
+                    </>
+                  ) : (
+                    <p className="bb-helper">
+                      Send a message, or select Inspect Agent Routing & Tool Audit under a response, to see its trace.
+                    </p>
+                  )}
+                </TabPanel>
+
+                {/* Identity */}
+                <TabPanel className="bb-panel">
+                  <Tile className="bb-card">
+                    <p className="bb-label">Verified context variables</p>
+                    <StructuredListWrapper isCondensed aria-label="Context variables">
+                      <StructuredListBody>
+                        {[
+                          ['bb_role', user.role],
+                          ['bb_store_id', `Store ${user.store_id}`],
+                          ['bb_region', user.region],
+                          ['bb_email', user.email],
+                        ].map(([k, v]) => (
+                          <StructuredListRow key={k}>
+                            <StructuredListCell noWrap><code>{k}</code></StructuredListCell>
+                            <StructuredListCell className="bb-strong">{v}</StructuredListCell>
+                          </StructuredListRow>
+                        ))}
+                      </StructuredListBody>
+                    </StructuredListWrapper>
+                  </Tile>
+
+                  <Tile className="bb-card">
+                    <p className="bb-label">Demo session marker</p>
+                    <StructuredListWrapper isCondensed aria-label="Session marker">
+                      <StructuredListBody>
+                        <StructuredListRow>
+                          <StructuredListCell noWrap>Snowflake user</StructuredListCell>
+                          <StructuredListCell><code>{user.dynamic_token?.snowflake_user}</code></StructuredListCell>
+                        </StructuredListRow>
+                        <StructuredListRow>
+                          <StructuredListCell noWrap>Snowflake role</StructuredListCell>
+                          <StructuredListCell><code>{user.dynamic_token?.snowflake_role}</code></StructuredListCell>
+                        </StructuredListRow>
+                        <StructuredListRow>
+                          <StructuredListCell noWrap>Granted scopes</StructuredListCell>
+                          <StructuredListCell>{user.dynamic_token?.scopes?.join(', ')}</StructuredListCell>
+                        </StructuredListRow>
+                        <StructuredListRow>
+                          <StructuredListCell noWrap>TTL</StructuredListCell>
+                          <StructuredListCell><Tag type="cyan" size="sm">300 s</Tag></StructuredListCell>
+                        </StructuredListRow>
+                      </StructuredListBody>
+                    </StructuredListWrapper>
+                    <CodeSnippet type="single" feedback="Copied">{user.dynamic_token?.token || ''}</CodeSnippet>
+                  </Tile>
+                </TabPanel>
+
+                {/* Memory */}
+                <TabPanel className="bb-panel">
+                  <Tile className="bb-card">
+                    <p className="bb-label">Learned preferences</p>
+                    <p className="bb-helper">
+                      Each preference has one slot. A new value replaces the old one, so there are no duplicates.
+                    </p>
+                    {memories.length > 0 ? (
+                      <ul className="bb-memories">
+                        {memories.map((m: any, idx: number) => (
+                          <li key={idx} className="bb-memory">
+                            <div>
+                              <div className="bb-memory__top">
+                                <Tag type="teal" size="sm">{m.category}</Tag>
+                                <span className="bb-helper">{m.updated_at ? m.updated_at.split(' ')[1] : 'active'}</span>
+                              </div>
+                              <p>
+                                <strong>{m.entity}</strong> ({m.attribute}): <span className="bb-memory__value">{m.value}</span>
+                              </p>
+                            </div>
+                            <IconButton
+                              kind="ghost"
+                              size="sm"
+                              label="Delete preference"
+                              align="left"
+                              onClick={() => handleDeleteMemory(m.entity)}
+                            >
+                              <TrashCan />
+                            </IconButton>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="bb-helper">No preferences yet. Try "I prefer oat milk" or "Format in tables".</p>
+                    )}
+                    {memories.length > 0 && (
+                      <Button kind="danger--tertiary" size="sm" renderIcon={TrashCan} onClick={handleClearMemory}>
+                        Clear all preferences
+                      </Button>
+                    )}
+                  </Tile>
+
+                  <Tile className="bb-card">
+                    <p className="bb-label">Try a preference change</p>
+                    <p className="bb-helper">Send one of these to watch the stored value update.</p>
+                    <div className="bb-suggestions">
+                      {PREFERENCE_PROMPTS.map(p => (
+                        <Button key={p.label} kind="tertiary" size="sm" disabled={loading} onClick={() => sendQuery(p.prompt)}>
+                          {p.label}
+                        </Button>
                       ))}
                     </div>
-                  ) : (
-                    <p className="empty-sub">No preferences stored yet. Try saying "I prefer oat milk" or "Format in tables".</p>
-                  )}
-
-                  {memories.length > 0 && (
-                    <button className="clear-memory-btn" onClick={handleClearMemory}>
-                      🗑️ Clear All Learned Preferences
-                    </button>
-                  )}
-                </div>
-
-                <div className="teach-preference-box">
-                  <div className="card-label">Test Dynamic Memory Invalidation:</div>
-                  <p className="card-sub">Click a prompt to see atomic slot updates supersede old values in real time:</p>
-                  <div className="quick-pref-chips">
-                    <button className="pref-chip" onClick={() => sendQuery("I switched to almond milk, please use that.")}>
-                      🔄 Switch to Almond Milk
-                    </button>
-                    <button className="pref-chip" onClick={() => sendQuery("I prefer oat milk in my drinks.")}>
-                      🥛 Prefer Oat Milk
-                    </button>
-                    <button className="pref-chip" onClick={() => sendQuery("Always format my responses in markdown tables.")}>
-                      📊 Format: Markdown Tables
-                    </button>
-                    <button className="pref-chip" onClick={() => sendQuery("Default lookback window to 14 days.")}>
-                      📅 Lookback: 14 Days
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </aside>
-      </div>
-    </div>
+                  </Tile>
+                </TabPanel>
+              </TabPanels>
+            </Tabs>
+          </aside>
+        </div>
+      </Theme>
+    </>
   )
 }

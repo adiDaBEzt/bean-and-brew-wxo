@@ -35,7 +35,7 @@ def require_clean_account(cur):
         if matches:
             conflicts.append(f"{object_type.lower()}: {', '.join(matches)}")
     if conflicts:
-        raise SystemExit(f"Existing Snowflake objects block a fresh lab setup ({'; '.join(conflicts)}). See lab/01-snowflake.md.")
+        raise SystemExit(f"Existing Snowflake objects block a fresh lab setup ({'; '.join(conflicts)}). See 'Step 2. Provision Snowflake' in README.md.")
 
 
 def service_public_keys():
